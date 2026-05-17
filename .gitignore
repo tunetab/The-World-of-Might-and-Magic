@@ -10,6 +10,12 @@ desktop.ini
 *.bak
 *.orig
 
+# Local Lore API search index.
+lore_api/.data/
+lore_api/.venv/
+lore_api/.pycache/
+lore_api/__pycache__/
+
 # Local Obsidian workspace state, if the vault is opened there.
 .obsidian/workspace*.json
 .obsidian/cache/
