@@ -95,7 +95,7 @@ if ($locationIndex -notmatch [regex]::Escape($relativePath)) {
 
 $mapPath = Join-Path $root '04_Локации\00_Карта_и_регионы.md'
 $mapText = Get-Content -Raw -Encoding UTF8 -LiteralPath $mapPath
-$row = "- `$relativePath` - $Summary"
+$row = "- ``$relativePath`` - $Summary"
 
 if ($mapText -notmatch [regex]::Escape($relativePath)) {
     if ($mapText -notmatch '## Локации, добавленные инструментом') {

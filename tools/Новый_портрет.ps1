@@ -241,11 +241,13 @@ if ($relativeImage) {
         Where-Object { $_ -notmatch "^\|\s*$escapedName\s*\|" }
     $portraitIndex = $portraitLines -join "`r`n"
     $portraitRow = "| $displayName | есть | ``$relativeImage`` |"
+    $availableTablePattern = '(?ms)(## Портреты есть.*?^\| --- \| --- \| --- \|\s*)'
     $portraitIndex = [regex]::Replace(
         $portraitIndex,
-        '(?m)^(\| --- \| --- \| --- \|\s*)$',
-        "`${1}`r`n$portraitRow",
-        1
+        $availableTablePattern,
+        "`${1}`r`n$portraitRow`r`n",
+        [System.Text.RegularExpressions.RegexOptions]::Multiline,
+        [TimeSpan]::FromSeconds(1)
     )
     Set-Content -LiteralPath $portraitIndexPath -Encoding UTF8 -Value $portraitIndex
 }
@@ -267,6 +269,3 @@ if ($relativeImage) {
 } else {
     "Prepared portrait prompt: $relativePrompt"
 }
-
-
-
