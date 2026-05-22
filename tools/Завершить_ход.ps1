@@ -5,7 +5,11 @@
 
     [switch]$SkipSceneIndex,
 
-    [switch]$SkipSourceIndex
+    [switch]$SkipSourceIndex,
+
+    [switch]$SkipCharacterIndex,
+
+    [switch]$SkipLocationIndex
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,8 +17,11 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 function Invoke-Step {
     param(
         [string]$Name,
@@ -40,6 +47,30 @@ if (-not $SkipSourceIndex) {
     }
 }
 
+if (-not $SkipCharacterIndex) {
+    Invoke-Step 'Сборка индекса персонажей' {
+        & (Join-Path $root 'tools\Собрать_индекс_персонажей.ps1') -SkipCheck
+    }
+}
+
+if (-not $SkipLocationIndex) {
+    Invoke-Step 'Сборка индекса локаций' {
+        & (Join-Path $root 'tools\Собрать_индекс_локаций.ps1') -SkipCheck
+    }
+}
+
+Invoke-Step 'Сборка решений' {
+    & (Join-Path $root 'tools\Собрать_решения.ps1') -SkipCheck
+}
+
+Invoke-Step 'Сборка вопросов' {
+    & (Join-Path $root 'tools\Собрать_вопросы.ps1') -SkipCheck
+}
+
+Invoke-Step 'Сборка фронтов' {
+    & (Join-Path $root 'tools\Собрать_фронты.ps1') -SkipCheck
+}
+
 Invoke-Step 'Сборка панели следующего хода' {
     & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
 }
@@ -61,6 +92,4 @@ Invoke-Step 'Общая проверка проекта' {
 }
 
 "`nTurn workspace is ready."
-
-
-
+}

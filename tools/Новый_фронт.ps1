@@ -37,119 +37,105 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-function Format-ProjectReference {
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
+$registryPath = Join-Path $root '09_Реестры\Фронты.json'
+
+function Normalize-LinkReference {
     param([string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $null
     }
 
-    $reference = $Value.Trim() -replace '\\', '/'
-
-    if ($reference -match '^`.+`$' -or $reference -match '^[a-z]+://') {
-        return $reference
-    }
-
-    return "``$reference``"
+    return ($Value.Trim().Trim('`') -replace '\\', '/')
 }
 
-function Add-RowBeforeHeading {
-    param(
-        [string]$Text,
-        [string]$Heading,
-        [string]$Row
-    )
-
-    $escapedHeading = [regex]::Escape($Heading)
-    $pattern = "(\r?\n)(##\s+$escapedHeading\s*)"
-    $result = [regex]::Replace(
-        $Text,
-        $pattern,
-        {
-            param($match)
-            return "$($match.Groups[1].Value)$Row$($match.Groups[1].Value)$($match.Groups[2].Value)"
-        },
-        1
-    )
-
-    if ($result -eq $Text) {
-        throw "Heading not found: ## $Heading"
-    }
-
-    return $result
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    throw "Front registry is missing: 09_Реестры/Фронты.json. Run .\tools\Собрать_фронты.ps1 -ImportFromMarkdown once."
 }
-
-$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$frontTrackerPath = Join-Path $root '01_Кампания\06_Фронты_и_таймеры.md'
-$frontTracker = Get-Content -Raw -Encoding UTF8 -LiteralPath $frontTrackerPath
-$today = Get-Date -Format 'yyyy-MM-dd'
 
 if ([string]::IsNullOrWhiteSpace($Description)) {
     $Description = $Name
 }
 
-if ($frontTracker -match "\b$([regex]::Escape($Id))\b") {
+$registry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $registryPath) | ConvertFrom-Json
+$fronts = @($registry.fronts)
+if ($fronts | Where-Object { $_.id -eq $Id } | Select-Object -First 1) {
     throw "FRONT-ID already exists: $Id"
 }
 
-$linkReferences = @(
-    $Links |
-        ForEach-Object { Format-ProjectReference -Value $_ } |
-        Where-Object { $_ }
-)
-
-$linksCell = if ($linkReferences.Count -gt 0) {
-    $linkReferences -join ', '
-} else {
-    '-'
+$fronts += [pscustomobject][ordered]@{
+    id = $Id
+    name = $Description
 }
+$registry.fronts = @($fronts)
 
-$frontTracker = [regex]::Replace(
-    $frontTracker,
-    '(?m)^updated_real_date:\s*.+$',
-    "updated_real_date: $today",
-    1
-)
-
-$frontTracker = Add-RowBeforeHeading `
-    -Text $frontTracker `
-    -Heading 'Срочные развилки' `
-    -Row "| $Id | $Description |"
+$activeFronts = @($registry.active_fronts)
+$activeFronts += [pscustomobject][ordered]@{
+    id = $Id
+    front = $Name
+    participants = $Participants
+    state = $State
+    risk = $Risk
+    next_trigger = $Trigger
+}
+$registry.active_fronts = @($activeFronts)
 
 if ($Urgent) {
+    $linkReferences = @(
+        $Links |
+            ForEach-Object { Normalize-LinkReference -Value $_ } |
+            Where-Object { $_ }
+    )
     $urgentText = if ([string]::IsNullOrWhiteSpace($UrgentSummary)) { $State } else { $UrgentSummary }
-    $frontTracker = Add-RowBeforeHeading `
-        -Text $frontTracker `
-        -Heading 'Активные фронты' `
-        -Row "| $Id | $Priority | $Name | $urgentText | $Trigger | $linksCell |"
+    $urgentForks = @($registry.urgent_forks)
+    $urgentForks += [pscustomobject][ordered]@{
+        id = $Id
+        priority = $Priority
+        front = $Name
+        summary = $urgentText
+        trigger = $Trigger
+        links = @($linkReferences)
+    }
+    $registry.urgent_forks = @($urgentForks)
 }
-
-$frontTracker = Add-RowBeforeHeading `
-    -Text $frontTracker `
-    -Heading 'Таймеры угроз' `
-    -Row "| $Id | $Name | $Participants | $State | $Risk | $Trigger |"
 
 if (-not [string]::IsNullOrWhiteSpace($Timer)) {
-    $frontTracker = Add-RowBeforeHeading `
-        -Text $frontTracker `
-        -Heading 'Правило обновления' `
-        -Row "| $Id | $Timer | $TimerStatus | $Trigger |"
+    $timers = @($registry.timers)
+    $timers += [pscustomobject][ordered]@{
+        id = $Id
+        timer = $Timer
+        status = $TimerStatus
+        trigger = $Trigger
+    }
+    $registry.timers = @($timers)
 }
 
-Set-Content -LiteralPath $frontTrackerPath -Encoding UTF8 -Value $frontTracker
+$registry.updated_real_date = Get-Date -Format 'yyyy-MM-dd'
+$json = ($registry | ConvertTo-Json -Depth 8).TrimEnd() + "`n"
+$encoding = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($registryPath, $json, $encoding)
 
-$global:LASTEXITCODE = 0
+& (Join-Path $root 'tools\Собрать_фронты.ps1') -SkipCheck
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
-if (-not $? -or $LASTEXITCODE -ne 0) {
-    exit 1
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 
 if (-not $SkipCheck) {
-    $global:LASTEXITCODE = 0
     & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if (-not $? -or $LASTEXITCODE -ne 0) {
-        exit 1
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
     }
 }
 
 "Created front: $Id"
+}

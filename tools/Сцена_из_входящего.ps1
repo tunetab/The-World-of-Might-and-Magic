@@ -39,6 +39,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 function Get-NewInboxEntries {
     param([string]$InboxText)
 
@@ -91,6 +93,7 @@ function Select-InboxHeading {
 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $hasInlineMessage = -not [string]::IsNullOrWhiteSpace($Text) -or -not [string]::IsNullOrWhiteSpace($TextPath)
 
 if ($hasInlineMessage) {
@@ -190,3 +193,4 @@ if (-not $SkipCheck) {
 }
 
 "Created scene from inbox: $createdScene"
+}

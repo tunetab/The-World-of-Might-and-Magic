@@ -7,7 +7,10 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $today = Get-Date -Format 'yyyy-MM-dd'
 $sourceRoot = Join-Path $root '08_Источники'
 $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие_сообщения.md'
@@ -151,3 +154,4 @@ if (-not $SkipCheck) {
 }
 
 "Built source index: $(Get-RelativeProjectPath $targetPath)"
+}

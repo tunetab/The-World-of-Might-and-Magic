@@ -11,8 +11,11 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 function Get-SectionText {
     param(
         [string]$Text,
@@ -113,7 +116,7 @@ $lines.Add("generated_real_date: $today") | Out-Null
 $lines.Add('generated_by: tools/Собрать_панель_хода.ps1') | Out-Null
 $lines.Add('---') | Out-Null
 $lines.Add('') | Out-Null
-$lines.Add('Этот файл пересобирается из `01_Кампания/03_Нерешенные_вопросы.md` и `01_Кампания/06_Фронты_и_таймеры.md`. Не веди его вручную, если можно запустить `.\tools\Собрать_панель_хода.ps1`.') | Out-Null
+$lines.Add('Этот файл пересобирается из `01_Кампания/03_Нерешенные_вопросы.md` и `01_Кампания/06_Фронты_и_таймеры.md`; вопросы и фронты в свою очередь собираются из JSON-реестров в `09_Реестры`. Не веди его вручную, если можно запустить `.\tools\Собрать_панель_хода.ps1`.') | Out-Null
 $lines.Add('') | Out-Null
 $lines.Add('## Ближайшие решения') | Out-Null
 $lines.Add('') | Out-Null
@@ -137,7 +140,9 @@ $lines.Add('1. Если ход стал каноном, обнови связа�
 $lines.Add('2. После сюжетного обновления пересобери этот файл командой `.\tools\Собрать_панель_хода.ps1`.') | Out-Null
 $lines.Add('3. Затем запусти `.\tools\Проверить_проект.ps1`.') | Out-Null
 
-Set-Content -LiteralPath $targetPath -Encoding UTF8 -Value $lines
+$panelText = ($lines -join "`n").TrimEnd() + "`n"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($targetPath, $panelText, $utf8NoBom)
 
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Проверить_проект.ps1')
@@ -147,3 +152,4 @@ if (-not $SkipCheck) {
 }
 
 "Updated next turn panel: 01_Кампания/07_Следующий_ход.md"
+}
