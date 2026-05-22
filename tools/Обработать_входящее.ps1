@@ -22,6 +22,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 function Format-ProjectReference {
     param([string]$Value)
 
@@ -117,6 +119,7 @@ function Select-InboxEntry {
 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие_сообщения.md'
 $inbox = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxPath
 $codeFence = '```'
@@ -213,3 +216,4 @@ if (-not $SkipCheck) {
 }
 
 "Processed inbox message: $selectedHeading"
+}

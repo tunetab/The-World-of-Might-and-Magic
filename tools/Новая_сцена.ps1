@@ -32,6 +32,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 function Convert-ToProjectFileName {
     param([string]$Value)
 
@@ -64,6 +66,7 @@ function Get-DeclaredFrontIds {
 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $frontTrackerPath = Join-Path $root '01_Кампания\06_Фронты_и_таймеры.md'
 $declaredFrontIds = Get-DeclaredFrontIds -FrontTrackerPath $frontTrackerPath
 
@@ -187,3 +190,4 @@ if (-not $SkipCheck) {
 }
 
 "Created scene: $relativePath"
+}

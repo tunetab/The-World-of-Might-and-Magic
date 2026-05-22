@@ -3,7 +3,10 @@
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $characterRoot = Join-Path $root '03_Персонажи'
 $portraitRoot = Join-Path $root '11_Медиа\Портреты_персонажей'
 $errors = New-Object 'System.Collections.Generic.List[string]'
@@ -180,4 +183,4 @@ if ($errors.Count -gt 0) {
     $errors | Sort-Object | ForEach-Object { "- $_" }
     exit 1
 }
-
+}

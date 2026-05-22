@@ -19,6 +19,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 function Convert-ToProjectFileName {
     param([string]$Value)
 
@@ -34,6 +36,7 @@ function Convert-ToProjectFileName {
 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $fileName = Convert-ToProjectFileName -Value $Name
 $relativePath = "03_Персонажи/$fileName.md"
 $targetPath = Join-Path $root ($relativePath -replace '/', '\')
@@ -98,32 +101,7 @@ $Role
 
 Set-Content -LiteralPath $targetPath -Encoding UTF8 -Value $content
 
-$indexPath = Join-Path $root '03_Персонажи\00_Индекс_персонажей.md'
-$indexText = Get-Content -Raw -Encoding UTF8 -LiteralPath $indexPath
-$portraitWord = switch ($PortraitStatus) {
-    'available' { 'есть' }
-    'planned' { 'запланирован' }
-    default { 'нужен' }
-}
-$indexRow = "| $Name | $Role | $portraitWord | ``$relativePath`` |"
-
-if ($indexText -notmatch [regex]::Escape($relativePath)) {
-    if ($indexText -notmatch '## Добавлено инструментом') {
-        $section = @"
-
-## Добавлено инструментом
-
-| Персонаж | Роль | Портрет | Файл |
-| --- | --- | --- | --- |
-$indexRow
-"@
-        $indexText = [regex]::Replace($indexText, '(\r?\n## Визуальные материалы)', "$section`$1", 1)
-    } else {
-        $indexText = [regex]::Replace($indexText, '(\r?\n## Визуальные материалы)', "`r`n$indexRow`$1", 1)
-    }
-
-    Set-Content -LiteralPath $indexPath -Encoding UTF8 -Value $indexText
-}
+& (Join-Path $root 'tools\Собрать_индекс_персонажей.ps1') -SkipCheck
 
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Проверить_проект.ps1')
@@ -133,4 +111,4 @@ if (-not $SkipCheck) {
 }
 
 "Created character: $relativePath"
-
+}

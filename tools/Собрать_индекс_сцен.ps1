@@ -7,7 +7,10 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
+
+. (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $today = Get-Date -Format 'yyyy-MM-dd'
 $branchesRoot = Join-Path $root '01_Кампания\Ветки'
 $archiveRoot = Join-Path $root '06_Архив_канона'
@@ -146,6 +149,4 @@ if (-not $SkipCheck) {
 }
 
 "Built scene index: $(Get-RelativeProjectPath $targetPath)"
-
-
-
+}
