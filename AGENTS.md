@@ -74,9 +74,38 @@ updated_real_date: 2026-05-13
 ## ID и навигация
 
 - Решения игрока: `DEC-001`, `DEC-PENDING-030`.
-- Открытые вопросы главы: `Q-C2-001`.
+- Открытые вопросы главы: `Q-C3-001`.
 - Открытые вопросы мира: `Q-WORLD-001`.
 - Фронты: используй стабильные `FRONT-*` из справочника в `01_Кампания/06_Фронты_и_таймеры.md`, например `FRONT-WHITE-HARBOR`, `FRONT-TAR-ELAM`, `FRONT-HECTOR-LINER`.
+
+## Формат файлов глав
+
+Файлы в `01_Кампания/Главы` всегда имеют `type: chapter`. Название главы хранится в H1 и имени файла, а не в front matter.
+
+Активная глава:
+
+```yaml
+type: chapter
+chapter: N
+status: active
+canon_level: active
+date_in_story: ...
+opened_real_date: YYYY-MM-DD
+```
+
+Закрытая глава:
+
+```yaml
+type: chapter
+chapter: N
+status: closed
+canon_level: active
+date_in_story: ...
+opened_real_date: YYYY-MM-DD
+closed_real_date: YYYY-MM-DD
+```
+
+Для старой главы 1 допустимо отсутствие `opened_real_date`, если дата не была зафиксирована. В новых главах не используй `type: campaign_chapter`, `title` или `previous_chapter` в front matter. В папке глав должна быть ровно одна `status: active`.
 
 ## Служебные инструменты
 

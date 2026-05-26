@@ -14,7 +14,7 @@
     [ValidateSet('active', 'waiting', 'later')]
     [string]$Status = 'waiting',
 
-    [ValidatePattern('^Q-(?:C2|WORLD)-\d{3}$')]
+    [ValidatePattern('^Q-(?:C\d+|WORLD)-\d{3}$')]
     [string]$Id,
 
     [switch]$SkipCheck

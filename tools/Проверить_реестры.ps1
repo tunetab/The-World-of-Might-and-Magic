@@ -372,7 +372,7 @@ if ($null -ne $questionRegistry) {
 
         if (-not [string]::IsNullOrWhiteSpace($id)) {
             $questionIds += $id
-            if ($id -notmatch '^Q-(?:C2|WORLD)-\d{3}$') {
+            if ($id -notmatch '^Q-(?:C\d+|WORLD)-\d{3}$') {
                 Add-Problem Error "$context has invalid ID format."
             }
         }
@@ -383,8 +383,8 @@ if ($null -ne $questionRegistry) {
 
         $scope = [string](Get-PropertyValue -Object $question -Name 'scope')
         $status = [string](Get-PropertyValue -Object $question -Name 'status')
-        if ($id -like 'Q-C2-*' -and $scope -ne 'chapter') {
-            Add-Problem Error "$context has Q-C2-* ID but non-chapter scope: $scope"
+        if ($id -match '^Q-C\d+-' -and $scope -ne 'chapter') {
+            Add-Problem Error "$context has Q-C* ID but non-chapter scope: $scope"
         }
 
         if ($id -like 'Q-WORLD-*' -and $scope -ne 'world') {
@@ -409,7 +409,7 @@ if ($null -ne $questionRegistry) {
 
         if (-not [string]::IsNullOrWhiteSpace($id)) {
             $historyIds += $id
-            if ($id -notmatch '^Q-(?:C2|WORLD)-\d{3}$') {
+            if ($id -notmatch '^Q-(?:C\d+|WORLD)-\d{3}$') {
                 Add-Problem Error "$context has invalid ID format."
             }
 

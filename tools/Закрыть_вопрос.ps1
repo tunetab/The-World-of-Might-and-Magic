@@ -1,6 +1,6 @@
 ﻿param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^Q-(C2|WORLD)-\d{3}$')]
+    [ValidatePattern('^Q-(?:C\d+|WORLD)-\d{3}$')]
     [string]$QuestionId,
 
     [string]$Resolution = 'Закрыто решением или обновлением канона.',

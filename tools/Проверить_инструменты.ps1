@@ -344,7 +344,7 @@ try {
         $openQuestionsBefore = Get-Content -Raw -Encoding UTF8 -LiteralPath $openQuestionsPath
         $closedQuestionsBefore = Get-Content -Raw -Encoding UTF8 -LiteralPath $closedQuestionsPath
 
-        $missingQuestionId = 'Q-C2-999'
+        $missingQuestionId = 'Q-C3-999'
         $registryBefore = $questionRegistryBefore | ConvertFrom-Json
         $registryIds = @($registryBefore.questions | ForEach-Object { $_.id })
         if ($registryIds -contains $missingQuestionId) {
@@ -381,9 +381,9 @@ try {
 
     Invoke-Step 'Закрыть открытый вопрос без порчи истории' {
         $openQuestionsBefore = Get-Content -Raw -Encoding UTF8 -LiteralPath $openQuestionsPath
-        $questionMatch = [regex]::Match($openQuestionsBefore, '(?m)^\|\s*(Q-(?:C2|WORLD)-\d{3})\s*\|(?:[^|]*\|){3}\s*(?:active|waiting|later)\s*\|\s*$')
+        $questionMatch = [regex]::Match($openQuestionsBefore, '(?m)^\|\s*(Q-(?:C\d+|WORLD)-\d{3})\s*\|(?:[^|]*\|){3}\s*(?:active|waiting|later)\s*\|\s*$')
         if (-not $questionMatch.Success) {
-            throw 'No open Q-C2/Q-WORLD entry found for Закрыть_вопрос.ps1 test.'
+            throw 'No open Q-C*/Q-WORLD entry found for Закрыть_вопрос.ps1 test.'
         }
 
         $questionId = $questionMatch.Groups[1].Value
@@ -429,7 +429,7 @@ try {
     Invoke-Step 'Параллельное закрытие вопросов не портит таблицы' {
         $openQuestionsBefore = Get-Content -Raw -Encoding UTF8 -LiteralPath $openQuestionsPath
         $questionIds = @(
-            [regex]::Matches($openQuestionsBefore, '(?m)^\|\s*(Q-(?:C2|WORLD)-\d{3})\s*\|(?:[^|]*\|){3}\s*(?:active|waiting|later)\s*\|\s*$') |
+            [regex]::Matches($openQuestionsBefore, '(?m)^\|\s*(Q-(?:C\d+|WORLD)-\d{3})\s*\|(?:[^|]*\|){3}\s*(?:active|waiting|later)\s*\|\s*$') |
                 ForEach-Object { $_.Groups[1].Value } |
                 Select-Object -First 2
         )

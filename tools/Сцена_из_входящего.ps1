@@ -10,7 +10,7 @@
 
     [string]$SceneTitle = '',
 
-    [int]$Chapter = 2,
+    [int]$Chapter = 3,
 
     [ValidateSet('draft', 'active', 'closed')]
     [string]$Status = 'draft',

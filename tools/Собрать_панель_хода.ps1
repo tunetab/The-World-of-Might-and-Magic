@@ -60,6 +60,16 @@ function Get-TableRows {
     return $rows
 }
 
+function Get-CurrentChapter {
+    param([string]$Text)
+
+    if ($Text -match '(?m)^current_chapter:\s*(\d+)\s*$') {
+        return [int]$Matches[1]
+    }
+
+    return 3
+}
+
 function Add-Table {
     param(
         [System.Collections.Generic.List[string]]$Lines,
@@ -71,6 +81,10 @@ function Add-Table {
     if ($Rows.Count -eq 0) {
         $Lines.Add($EmptyText) | Out-Null
         return
+    }
+
+    if ($Rows[0] -is [string]) {
+        $Rows = ,$Rows
     }
 
     $Lines.Add('| ' + ($Header -join ' | ') + ' |') | Out-Null
@@ -87,12 +101,14 @@ $targetPath = Join-Path $root '01_Кампания\07_Следующий_ход.
 $openQuestions = Get-Content -Raw -Encoding UTF8 -LiteralPath $openQuestionsPath
 $frontTracker = Get-Content -Raw -Encoding UTF8 -LiteralPath $frontTrackerPath
 $today = Get-Date -Format 'yyyy-MM-dd'
+$currentChapter = Get-CurrentChapter -Text $openQuestions
+$chapterQuestionHeading = "Вопросы главы $currentChapter"
 
 $decisionRows = Get-TableRows -Text $openQuestions -Heading 'Активные решения' |
     Where-Object { $_.Count -ge 5 -and $_[4] -eq 'active' } |
     Select-Object -First $MaxDecisions
 
-$questionRows = Get-TableRows -Text $openQuestions -Heading 'Вопросы главы 2' |
+$questionRows = Get-TableRows -Text $openQuestions -Heading $chapterQuestionHeading |
     Where-Object { $_.Count -ge 5 -and $_[4] -eq 'active' } |
     Select-Object -First $MaxQuestions
 
@@ -111,7 +127,7 @@ $lines.Add('---') | Out-Null
 $lines.Add('type: next_turn_panel') | Out-Null
 $lines.Add('status: active') | Out-Null
 $lines.Add('canon_level: support') | Out-Null
-$lines.Add('current_chapter: 2') | Out-Null
+$lines.Add("current_chapter: $currentChapter") | Out-Null
 $lines.Add("generated_real_date: $today") | Out-Null
 $lines.Add('generated_by: tools/Собрать_панель_хода.ps1') | Out-Null
 $lines.Add('---') | Out-Null

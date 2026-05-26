@@ -109,7 +109,7 @@ function Get-HistoryRows {
     $history = New-Object 'System.Collections.Generic.List[object]'
     $matches = [regex]::Matches(
         $ClosedQuestions,
-        '(?m)^-\s+(\d{4}-\d{2}-\d{2})\s+-\s+`(Q-(?:C2|WORLD)-\d{3})`:\s+(.+?)\s*$'
+        '(?m)^-\s+(\d{4}-\d{2}-\d{2})\s+-\s+`(Q-(?:C\d+|WORLD)-\d{3})`:\s+(.+?)\s*$'
     )
 
     foreach ($match in $matches) {
@@ -123,12 +123,49 @@ function Get-HistoryRows {
     return $history
 }
 
+function Get-CurrentChapterFromMarkdown {
+    param([string]$Text)
+
+    if ($Text -match '(?m)^current_chapter:\s*(\d+)\s*$') {
+        return [int]$Matches[1]
+    }
+
+    return 3
+}
+
+function Get-ChapterQuestionsHeading {
+    param([int]$Chapter)
+
+    return "Вопросы главы $Chapter"
+}
+
+function Get-ChapterQuestionRows {
+    param(
+        [string]$Text,
+        [int]$Chapter
+    )
+
+    $heading = Get-ChapterQuestionsHeading -Chapter $Chapter
+    $rows = @(Get-TableRows -Text $Text -Heading $heading)
+    if ($rows.Count -gt 0) {
+        return $rows
+    }
+
+    $fallback = [regex]::Match($Text, '(?m)^##\s+(Вопросы главы \d+)\s*$')
+    if ($fallback.Success) {
+        return @(Get-TableRows -Text $Text -Heading $fallback.Groups[1].Value)
+    }
+
+    return @()
+}
+
 function Import-QuestionRegistry {
     $openQuestions = Read-Text -Path $openQuestionsPath
     $closedQuestions = Read-Text -Path $closedQuestionsPath
     $questions = New-Object 'System.Collections.Generic.List[object]'
+    $currentChapter = Get-CurrentChapterFromMarkdown -Text $openQuestions
 
-    foreach ($row in (Get-TableRows -Text $openQuestions -Heading 'Вопросы главы 2')) {
+    foreach ($row in (Get-ChapterQuestionRows -Text $openQuestions -Chapter $currentChapter)) {
         $questions.Add((ConvertTo-QuestionObject -Cells $row -Scope 'chapter')) | Out-Null
     }
 
@@ -136,7 +173,7 @@ function Import-QuestionRegistry {
         $questions.Add((ConvertTo-QuestionObject -Cells $row -Scope 'world')) | Out-Null
     }
 
-    foreach ($row in (Get-TableRows -Text $closedQuestions -Heading 'Вопросы главы 2')) {
+    foreach ($row in (Get-ChapterQuestionRows -Text $closedQuestions -Chapter $currentChapter)) {
         $question = ConvertTo-QuestionObject -Cells $row -Scope 'chapter'
         $question.status = 'resolved'
         $questions.Add($question) | Out-Null
@@ -154,7 +191,7 @@ function Import-QuestionRegistry {
         type = 'question_registry'
         status = 'active'
         canon_level = 'support'
-        current_chapter = 2
+        current_chapter = $currentChapter
         updated_real_date = $today
         generated_from = @(
             '01_Кампания/03_Нерешенные_вопросы.md',
@@ -283,6 +320,9 @@ function Render-OpenQuestions {
 
     $decisionRows = @(Get-ActiveDecisionRows)
     $questions = @($Registry.questions)
+    $chapterNumber = [int]$Registry.current_chapter
+    $chapterPrefix = "Q-C$chapterNumber"
+    $chapterHeading = Get-ChapterQuestionsHeading -Chapter $chapterNumber
     $chapterQuestions = @($questions | Where-Object { $_.scope -eq 'chapter' -and $_.status -ne 'resolved' })
     $worldQuestions = @($questions | Where-Object { $_.scope -eq 'world' -and $_.status -ne 'resolved' })
     $lines = New-Object 'System.Collections.Generic.List[string]'
@@ -302,7 +342,7 @@ function Render-OpenQuestions {
     Add-RawLine -Lines $lines
     Add-RawLine -Lines $lines -Line 'Этот файл пересобирается из `09_Реестры/Вопросы.json`; активные `DEC-PENDING-*` берутся из `09_Реестры/Решения.json`. Для создания вопросов используй `.\tools\Новый_вопрос.ps1`, для закрытия вопросов - `.\tools\Закрыть_вопрос.ps1`.'
     Add-RawLine -Lines $lines
-    Add-RawLine -Lines $lines -Line 'Новый `Q-C2-*` или `Q-WORLD-*` всегда получает следующий свободный номер по максимуму из `09_Реестры/Вопросы.json`. Не переиспользуй ID закрытого вопроса.'
+    Add-RawLine -Lines $lines -Line "Новый ``$chapterPrefix-*`` или ``Q-WORLD-*`` всегда получает следующий свободный номер по максимуму из ``09_Реестры/Вопросы.json``. Не переиспользуй ID закрытого вопроса."
     Add-RawLine -Lines $lines
     Add-RawLine -Lines $lines -Line '## Как читать приоритет'
     Add-RawLine -Lines $lines
@@ -323,7 +363,7 @@ function Render-OpenQuestions {
     Add-RawLine -Lines $lines
     Add-DecisionTable -Lines $lines -Rows $decisionRows
     Add-RawLine -Lines $lines
-    Add-RawLine -Lines $lines -Line '## Вопросы главы 2'
+    Add-RawLine -Lines $lines -Line "## $chapterHeading"
     Add-RawLine -Lines $lines
     Add-QuestionTable -Lines $lines -Header @('ID', 'Приоритет', 'Вопрос', 'Владелец / ветка', 'Статус') -Questions $chapterQuestions
     Add-RawLine -Lines $lines
@@ -338,6 +378,9 @@ function Render-ClosedQuestions {
     param([object]$Registry)
 
     $questions = @($Registry.questions)
+    $chapterNumber = [int]$Registry.current_chapter
+    $chapterPrefix = "Q-C$chapterNumber"
+    $chapterHeading = Get-ChapterQuestionsHeading -Chapter $chapterNumber
     $chapterQuestions = @($questions | Where-Object { $_.scope -eq 'chapter' -and $_.status -eq 'resolved' })
     $worldQuestions = @($questions | Where-Object { $_.scope -eq 'world' -and $_.status -eq 'resolved' })
     $history = @($Registry.history)
@@ -357,9 +400,9 @@ function Render-ClosedQuestions {
     Add-RawLine -Lines $lines
     Add-RawLine -Lines $lines -Line 'Этот файл пересобирается из `09_Реестры/Вопросы.json` и хранит вопросы, которые уже получили канонический ответ. Открытые вопросы и pending-решения остаются в `01_Кампания/03_Нерешенные_вопросы.md`.'
     Add-RawLine -Lines $lines
-    Add-RawLine -Lines $lines -Line 'Новые `Q-C2-*` и `Q-WORLD-*` создаются через `.\tools\Новый_вопрос.ps1`; закрытый ID не переиспользуется.'
+    Add-RawLine -Lines $lines -Line "Новые ``$chapterPrefix-*`` и ``Q-WORLD-*`` создаются через ``.\tools\Новый_вопрос.ps1``; закрытый ID не переиспользуется."
     Add-RawLine -Lines $lines
-    Add-RawLine -Lines $lines -Line '## Вопросы главы 2'
+    Add-RawLine -Lines $lines -Line "## $chapterHeading"
     Add-RawLine -Lines $lines
     Add-QuestionTable -Lines $lines -Header @('ID', 'Приоритет', 'Вопрос', 'Владелец / ветка', 'Статус') -Questions $chapterQuestions
     Add-RawLine -Lines $lines
