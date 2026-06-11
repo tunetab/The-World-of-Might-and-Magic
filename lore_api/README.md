@@ -185,7 +185,7 @@ http://127.0.0.1:8010/openapi.json
 Если окружение уже создано и зависимости установлены, обычно достаточно:
 
 ```bash
-cd /Users/sergeipanov/The-World-of-Might-and-Magic
+cd /Users/sergeipanov/The-World-of-Might-and-Magic-Fork
 source lore_api/.venv/bin/activate
 python -m lore_api.indexer
 uvicorn lore_api.app:app --host 127.0.0.1 --port 8010

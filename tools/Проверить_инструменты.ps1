@@ -76,13 +76,22 @@ function Ensure-ToolTestPendingDecision {
         [string]$ToolsRoot
     )
 
+    $testQuestion = 'Тестовое pending-решение для проверки инструментов'
     $registry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $DecisionRegistryPath) | ConvertFrom-Json
-    if (@($registry.decisions | Where-Object { $_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*' }).Count -gt 0) {
-        return
+    $existing = @(
+        $registry.decisions |
+            Where-Object {
+                ($_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*') -and
+                $_.question -eq $testQuestion
+            }
+    ) | Select-Object -First 1
+
+    if ($null -ne $existing) {
+        return $existing.id
     }
 
-    & (Join-Path $ToolsRoot 'Новое_решение.ps1') `
-        -Question 'Тестовое pending-решение для проверки инструментов' `
+    $toolOutput = & (Join-Path $ToolsRoot 'Новое_решение.ps1') `
+        -Question $testQuestion `
         -Owner 'Инструменты' `
         -PlayerCharacter 'Тест / Инструменты' `
         -Scene 'Проверка инструментов' `
@@ -93,9 +102,26 @@ function Ensure-ToolTestPendingDecision {
         -LongTermConsequences 'тестовая запись должна закрыться инструментом.' `
         -Links 'tools/Проверить_инструменты.ps1' `
         -SkipCheck
+
+    $toolOutput | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+
+    $registry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $DecisionRegistryPath) | ConvertFrom-Json
+    $created = @(
+        $registry.decisions |
+            Where-Object {
+                ($_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*') -and
+                $_.question -eq $testQuestion
+            }
+    ) | Select-Object -Last 1
+
+    if ($null -eq $created) {
+        throw 'Новое_решение.ps1 did not add the tool test pending decision to the decision registry.'
+    }
+
+    return $created.id
 }
 
 function Invoke-ExpectedFailure {
@@ -238,7 +264,7 @@ try {
         }
     }
 
-    Ensure-ToolTestPendingDecision `
+    $toolTestPendingId = Ensure-ToolTestPendingDecision `
         -DecisionRegistryPath $decisionRegistryPath `
         -ToolsRoot $toolsRoot
 
@@ -288,12 +314,11 @@ try {
 
     Invoke-Step 'Закрыть pending-решение без порчи журнала' {
         $decisionLogBefore = Get-Content -Raw -Encoding UTF8 -LiteralPath $decisionLogPath
-        $pendingMatch = [regex]::Match($decisionLogBefore, '(?m)^###\s+(DEC-PENDING-\d{3})\s*$')
-        if (-not $pendingMatch.Success) {
-            throw 'No DEC-PENDING entry found for Закрыть_решение.ps1 test.'
+        $pendingId = $toolTestPendingId
+        if ($decisionLogBefore -notmatch "(?m)^###\s+$([regex]::Escape($pendingId))\s*$") {
+            throw "Tool test pending decision was not found for Закрыть_решение.ps1 test: $pendingId"
         }
 
-        $pendingId = $pendingMatch.Groups[1].Value
         $acceptedId = Get-NextAcceptedDecisionId -DecisionLogPath $decisionLogPath
         $choice = "Тестовое закрытие $pendingId"
         $effect = "Тестовый эффект закрытия $pendingId"
