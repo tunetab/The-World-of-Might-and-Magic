@@ -431,6 +431,13 @@ Render-OpenQuestions -Registry $registry
 Render-ClosedQuestions -Registry $registry
 Save-QuestionRegistry -Registry $registry
 
+if (Test-Path -LiteralPath (Join-Path $root 'tools\Собрать_срезы_реестров.ps1')) {
+    & (Join-Path $root 'tools\Собрать_срезы_реестров.ps1') -SkipCheck
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
     if ($LASTEXITCODE -ne 0) {

@@ -242,6 +242,78 @@ function Assert-GeneratedFrom {
     }
 }
 
+function Assert-ViewCount {
+    param(
+        [object]$View,
+        [object[]]$Items,
+        [string]$Context
+    )
+
+    Assert-RequiredTextField -Object $View -Field 'count' -Context $Context
+    $countValue = Get-PropertyValue -Object $View -Name 'count'
+    if ($null -eq $countValue) {
+        return
+    }
+
+    try {
+        $declaredCount = [int]$countValue
+    } catch {
+        Add-Problem Error "$Context has non-numeric count: $countValue"
+        return
+    }
+
+    if ($declaredCount -ne @($Items).Count) {
+        Add-Problem Error "$Context count $declaredCount does not match actual item count $(@($Items).Count)."
+    }
+}
+
+function Assert-SourceRegistry {
+    param(
+        [object]$View,
+        [string]$ExpectedSource,
+        [string]$Context
+    )
+
+    $sources = @((Get-PropertyValue -Object $View -Name 'generated_from') | ForEach-Object { [string]$_ })
+    if ($sources -notcontains $ExpectedSource) {
+        Add-Problem Error "$Context generated_from does not include expected source: $ExpectedSource"
+    }
+}
+
+function Get-ObjectIds {
+    param([object[]]$Items)
+
+    return @(
+        $Items |
+            ForEach-Object { [string](Get-PropertyValue -Object $_ -Name 'id') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+
+function Compare-IdSets {
+    param(
+        [string]$LeftName,
+        [string[]]$LeftIds,
+        [string]$RightName,
+        [string[]]$RightIds
+    )
+
+    $leftUnique = @($LeftIds | Sort-Object -Unique)
+    $rightUnique = @($RightIds | Sort-Object -Unique)
+
+    foreach ($id in $leftUnique) {
+        if ($rightUnique -notcontains $id) {
+            Add-Problem Error "$LeftName contains $id but $RightName does not."
+        }
+    }
+
+    foreach ($id in $rightUnique) {
+        if ($leftUnique -notcontains $id) {
+            Add-Problem Error "$RightName contains $id but $LeftName does not."
+        }
+    }
+}
+
 function Read-RegistryJson {
     param(
         [string]$RelativePath,
@@ -293,6 +365,11 @@ $validPriorities = @('критический', 'высокий', 'средний
 $decisionCount = 0
 $questionCount = 0
 $frontCount = 0
+$pendingDecisionIds = @()
+$acceptedDecisionIds = @()
+$openQuestionIds = @()
+$closedQuestionIds = @()
+$questionHistoryIds = @()
 
 $decisionRegistry = Read-RegistryJson -RelativePath '09_Реестры\Решения.json' -ExpectedType 'decision_registry'
 if ($null -ne $decisionRegistry) {
@@ -352,6 +429,8 @@ if ($null -ne $decisionRegistry) {
     }
 
     Assert-UniqueValues -Values $decisionIds -Context 'Decision registry IDs'
+    $pendingDecisionIds = Get-ObjectIds -Items @($decisions | Where-Object { $_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*' })
+    $acceptedDecisionIds = Get-ObjectIds -Items @($decisions | Where-Object { $_.state -eq 'accepted' -and $_.id -match '^DEC-\d{3}$' })
 }
 
 $questionRegistry = Read-RegistryJson -RelativePath '09_Реестры\Вопросы.json' -ExpectedType 'question_registry' -ExtraTopFields @('current_chapter')
@@ -428,6 +507,76 @@ if ($null -ne $questionRegistry) {
     foreach ($id in $resolvedQuestionIds) {
         if ($historyIds -notcontains $id) {
             Add-Problem Warning "Resolved question has no history entry in registry: $id"
+        }
+    }
+
+    $openQuestionIds = Get-ObjectIds -Items @($questions | Where-Object { $_.status -ne 'resolved' })
+    $closedQuestionIds = Get-ObjectIds -Items @($questions | Where-Object { $_.status -eq 'resolved' })
+    $questionHistoryIds = @($historyIds)
+}
+
+if ($null -ne $decisionRegistry) {
+    $pendingDecisionView = Read-RegistryJson -RelativePath '09_Реестры\Решения_незакрытые.json' -ExpectedType 'pending_decision_view'
+    if ($null -ne $pendingDecisionView) {
+        $viewDecisions = Get-RegistryArray -Registry $pendingDecisionView -Field 'decisions' -Context 'Pending decision view' -AllowEmpty
+        Assert-SourceRegistry -View $pendingDecisionView -ExpectedSource '09_Реестры/Решения.json' -Context 'Pending decision view'
+        Assert-ViewCount -View $pendingDecisionView -Items $viewDecisions -Context 'Pending decision view'
+        Compare-IdSets 'pending decision view decisions' (Get-ObjectIds -Items $viewDecisions) 'decision registry pending decisions' $pendingDecisionIds
+
+        foreach ($decision in $viewDecisions) {
+            $id = [string](Get-PropertyValue -Object $decision -Name 'id')
+            $state = [string](Get-PropertyValue -Object $decision -Name 'state')
+            if ($id -notmatch '^DEC-PENDING-\d{3}$' -or $state -ne 'pending') {
+                Add-Problem Error "Pending decision view contains non-pending decision: $id / $state"
+            }
+        }
+    }
+
+    $acceptedDecisionView = Read-RegistryJson -RelativePath '09_Реестры\Решения_закрытые.json' -ExpectedType 'accepted_decision_view'
+    if ($null -ne $acceptedDecisionView) {
+        $viewDecisions = Get-RegistryArray -Registry $acceptedDecisionView -Field 'decisions' -Context 'Accepted decision view' -AllowEmpty
+        Assert-SourceRegistry -View $acceptedDecisionView -ExpectedSource '09_Реестры/Решения.json' -Context 'Accepted decision view'
+        Assert-ViewCount -View $acceptedDecisionView -Items $viewDecisions -Context 'Accepted decision view'
+        Compare-IdSets 'accepted decision view decisions' (Get-ObjectIds -Items $viewDecisions) 'decision registry accepted decisions' $acceptedDecisionIds
+
+        foreach ($decision in $viewDecisions) {
+            $id = [string](Get-PropertyValue -Object $decision -Name 'id')
+            $state = [string](Get-PropertyValue -Object $decision -Name 'state')
+            if ($id -notmatch '^DEC-\d{3}$' -or $state -ne 'accepted') {
+                Add-Problem Error "Accepted decision view contains non-accepted decision: $id / $state"
+            }
+        }
+    }
+}
+
+if ($null -ne $questionRegistry) {
+    $openQuestionView = Read-RegistryJson -RelativePath '09_Реестры\Вопросы_открытые.json' -ExpectedType 'open_question_view' -ExtraTopFields @('current_chapter')
+    if ($null -ne $openQuestionView) {
+        $viewQuestions = Get-RegistryArray -Registry $openQuestionView -Field 'questions' -Context 'Open question view' -AllowEmpty
+        Assert-SourceRegistry -View $openQuestionView -ExpectedSource '09_Реестры/Вопросы.json' -Context 'Open question view'
+        Assert-ViewCount -View $openQuestionView -Items $viewQuestions -Context 'Open question view'
+        Compare-IdSets 'open question view questions' (Get-ObjectIds -Items $viewQuestions) 'question registry open questions' $openQuestionIds
+
+        foreach ($question in $viewQuestions) {
+            if ([string](Get-PropertyValue -Object $question -Name 'status') -eq 'resolved') {
+                Add-Problem Error "Open question view contains resolved question: $($question.id)"
+            }
+        }
+    }
+
+    $closedQuestionView = Read-RegistryJson -RelativePath '09_Реестры\Вопросы_закрытые.json' -ExpectedType 'closed_question_view' -ExtraTopFields @('current_chapter')
+    if ($null -ne $closedQuestionView) {
+        $viewQuestions = Get-RegistryArray -Registry $closedQuestionView -Field 'questions' -Context 'Closed question view' -AllowEmpty
+        $viewHistory = Get-RegistryArray -Registry $closedQuestionView -Field 'history' -Context 'Closed question view' -AllowEmpty
+        Assert-SourceRegistry -View $closedQuestionView -ExpectedSource '09_Реестры/Вопросы.json' -Context 'Closed question view'
+        Assert-ViewCount -View $closedQuestionView -Items $viewQuestions -Context 'Closed question view'
+        Compare-IdSets 'closed question view questions' (Get-ObjectIds -Items $viewQuestions) 'question registry resolved questions' $closedQuestionIds
+        Compare-IdSets 'closed question view history' (Get-ObjectIds -Items $viewHistory) 'question registry history' $questionHistoryIds
+
+        foreach ($question in $viewQuestions) {
+            if ([string](Get-PropertyValue -Object $question -Name 'status') -ne 'resolved') {
+                Add-Problem Error "Closed question view contains unresolved question: $($question.id)"
+            }
         }
     }
 }

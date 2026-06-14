@@ -67,6 +67,10 @@ Invoke-Step 'Сборка вопросов' {
     & (Join-Path $root 'tools\Собрать_вопросы.ps1') -SkipCheck
 }
 
+Invoke-Step 'Сборка JSON-срезов реестров' {
+    & (Join-Path $root 'tools\Собрать_срезы_реестров.ps1') -SkipCheck
+}
+
 Invoke-Step 'Сборка фронтов' {
     & (Join-Path $root 'tools\Собрать_фронты.ps1') -SkipCheck
 }
