@@ -9,7 +9,9 @@
 
     [switch]$SkipCharacterIndex,
 
-    [switch]$SkipLocationIndex
+    [switch]$SkipLocationIndex,
+
+    [switch]$SkipAssetIndex
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +58,12 @@ if (-not $SkipCharacterIndex) {
 if (-not $SkipLocationIndex) {
     Invoke-Step 'Сборка индекса локаций' {
         & (Join-Path $root 'tools\Собрать_индекс_локаций.ps1') -SkipCheck
+    }
+}
+
+if (-not $SkipAssetIndex) {
+    Invoke-Step 'Сборка индекса активов персонажей' {
+        & (Join-Path $root 'tools\Собрать_индекс_активов.ps1') -SkipCheck
     }
 }
 

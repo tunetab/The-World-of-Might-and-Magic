@@ -175,6 +175,7 @@ try {
     $frontRegistryPath = Join-Path $copyRoot '09_Реестры\Фронты.json'
     $sourceIndexPath = Join-Path $copyRoot '08_Источники\00_Индекс_источников.md'
     $sceneIndexPath = Join-Path $copyRoot '01_Кампания\00_Индекс_сцен.md'
+    $assetIndexPath = Join-Path $copyRoot '05_Активы_персонажей\00_Индекс_активов.md'
     $decisionLogPath = Join-Path $copyRoot '01_Кампания\02_Журнал_решений.md'
     $openQuestionsPath = Join-Path $copyRoot '01_Кампания\03_Нерешенные_вопросы.md'
     $closedQuestionsPath = Join-Path $copyRoot '01_Кампания\03_Закрытые_вопросы.md'
@@ -575,10 +576,18 @@ try {
         & (Join-Path $toolsRoot 'Собрать_индекс_источников.ps1') -SkipCheck
         Assert-TextContains -Path $sourceIndexPath -Expected 'Тестовое входящее инструментов'
         Assert-TextContains -Path $sourceIndexPath -Expected 'Входящее для сцены инструментов'
+        Assert-TextContains -Path $sourceIndexPath -Expected '| processed | source_note | обработано | Тестовое входящее инструментов |'
+    }
+
+    Invoke-Step 'Собрать индекс активов персонажей' {
+        & (Join-Path $toolsRoot 'Собрать_индекс_активов.ps1') -SkipCheck
+        Assert-TextContains -Path $assetIndexPath -Expected 'Флагманский линкор'
+        Assert-TextContains -Path $assetIndexPath -Expected 'Принц Михаэль'
     }
 
     Invoke-Step 'Финальная проверка временной копии' {
         & (Join-Path $toolsRoot 'Собрать_индекс_сцен.ps1') -SkipCheck
+        & (Join-Path $toolsRoot 'Собрать_индекс_активов.ps1') -SkipCheck
         & (Join-Path $toolsRoot 'Собрать_решения.ps1') -SkipCheck
         & (Join-Path $toolsRoot 'Собрать_вопросы.ps1') -SkipCheck
         & (Join-Path $toolsRoot 'Собрать_фронты.ps1') -SkipCheck

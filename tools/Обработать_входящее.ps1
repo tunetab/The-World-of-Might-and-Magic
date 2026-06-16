@@ -118,6 +118,86 @@ function Select-InboxEntry {
     throw "Inbox message not found: $Needle"
 }
 
+function Resolve-SourceReference {
+    param(
+        [string]$Root,
+        [string]$SourceLine
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourceLine)) {
+        return $null
+    }
+
+    $sourceReference = $SourceLine.Trim()
+    if ($sourceReference -match '`([^`]+\.md)`') {
+        $sourceReference = $Matches[1]
+    }
+
+    if ($sourceReference -match '^[a-z]+://' -or $sourceReference -notmatch '\.md$') {
+        return $null
+    }
+
+    $normalized = $sourceReference.Trim('`') -replace '/', '\'
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return $null
+    }
+
+    $candidatePath = $normalized
+    if (-not [System.IO.Path]::IsPathRooted($candidatePath)) {
+        $candidatePath = Join-Path $Root $normalized
+    }
+
+    if (-not (Test-Path -LiteralPath $candidatePath)) {
+        return $null
+    }
+
+    return (Resolve-Path -LiteralPath $candidatePath).Path
+}
+
+function Set-SourceLifecycleStatus {
+    param(
+        [string]$Root,
+        [string]$SourceLine,
+        [string]$LifecycleStatus
+    )
+
+    if ([string]::IsNullOrWhiteSpace($LifecycleStatus)) {
+        return
+    }
+
+    $sourcePath = Resolve-SourceReference -Root $Root -SourceLine $SourceLine
+    if (-not $sourcePath) {
+        return
+    }
+
+    $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $Root '08_Источники')).Path
+    $isInSourceRoot = $sourcePath.StartsWith($sourceRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $isInSourceRoot) {
+        return
+    }
+
+    $sourceText = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+    if ($sourceText -notmatch '(?m)^type:\s*(source|source_note|source_compilation)\s*$') {
+        return
+    }
+
+    if ($sourceText -notmatch '(?m)^status:\s*\S+') {
+        return
+    }
+
+    $updatedSourceText = [regex]::Replace(
+        $sourceText,
+        '(?m)^status:\s*\S+\s*$',
+        "status: $LifecycleStatus",
+        1
+    )
+
+    if ($updatedSourceText -ne $sourceText) {
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($sourcePath, $updatedSourceText, $encoding)
+    }
+}
+
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие_сообщения.md'
@@ -149,6 +229,12 @@ if (-not [string]::IsNullOrWhiteSpace($SourcePath)) {
     $sourceLine = $Matches[1].Trim()
 } else {
     $sourceLine = 'не указан'
+}
+
+$sourceLifecycleStatus = switch ($Status) {
+    'обработано' { 'processed' }
+    'отклонено' { 'archived' }
+    default { $null }
 }
 
 $relatedLinks = New-Object 'System.Collections.Generic.List[string]'
@@ -206,6 +292,7 @@ if (-not [string]::IsNullOrWhiteSpace($processedRest)) {
 $updatedInbox += "`r`n"
 
 Set-Content -LiteralPath $inboxPath -Encoding UTF8 -Value $updatedInbox
+Set-SourceLifecycleStatus -Root $root -SourceLine $sourceLine -LifecycleStatus $sourceLifecycleStatus
 
 if (-not $SkipCheck) {
     $global:LASTEXITCODE = 0
