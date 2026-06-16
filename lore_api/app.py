@@ -116,10 +116,9 @@ class SceneMatch(BaseModel):
 
 
 class SceneContextResponse(BaseModel):
-    scene: Optional[SceneSource] = None
-    scene_matches: list[SceneMatch] = Field(default_factory=list)
     characters: list[SceneCharacter]
     location: Optional[str] = None
+    scene_matches: list[SceneMatch] = Field(default_factory=list)
     related_context: list[ChunkResult]
 
 
@@ -175,6 +174,19 @@ def connect() -> sqlite3.Connection:
 
 def row_to_dict(row: sqlite3.Row) -> dict:
     return {key: row[key] for key in row.keys()}
+
+
+def dump_chunk(chunk: Any) -> dict:
+    if hasattr(chunk, "model_dump"):
+        return chunk.model_dump()
+    return dict(chunk)
+
+
+def split_character_names(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    parts = re.split(r"[,\n;/]+", value)
+    return [part.strip().strip(" .;,:") for part in parts if part.strip().strip(" .;,:")]
 
 
 def cache_get(key: tuple[Any, ...]) -> Optional[dict]:
@@ -275,6 +287,25 @@ def get_chunks_for_document(connection: sqlite3.Connection, document_id: int, li
     return [row_to_dict(row) for row in rows]
 
 
+def get_section_chunks_for_document(
+    connection: sqlite3.Connection,
+    document_id: int,
+    section_name: str,
+    limit: int = 8,
+) -> list[dict]:
+    rows = connection.execute(
+        """
+        SELECT id, path, title, heading, entity_type, text
+        FROM chunks
+        WHERE document_id = ? AND LOWER(heading) = LOWER(?)
+        ORDER BY id
+        LIMIT ?
+        """,
+        (document_id, section_name, limit),
+    ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
 def get_references_for_document(connection: sqlite3.Connection, document_id: int) -> list[dict]:
     rows = connection.execute(
         """
@@ -336,7 +367,7 @@ def get_branch_context_for_scene(
     ):
         if document is None or doc_limit <= 0:
             continue
-        chunks.extend(get_chunks_for_document(connection, int(document["id"]), limit=doc_limit))
+        chunks.extend(get_section_chunks_for_document(connection, int(document["id"]), "Событие", limit=doc_limit))
 
     deduped: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
@@ -349,30 +380,6 @@ def get_branch_context_for_scene(
         if len(deduped) >= limit:
             break
     return deduped
-
-
-def resolve_scene_document(
-    connection: sqlite3.Connection,
-    scene_name: str,
-) -> sqlite3.Row | None:
-    normalized = normalize_repo_path(scene_name)
-    if normalized:
-        if normalized.endswith(".md") or normalized.startswith("01_Кампания/"):
-            document = find_document_by_path(connection, normalized)
-            if document and document["entity_type"] == "scene":
-                return document
-
-            if normalized.startswith("01_Кампания/") and not normalized.endswith(".md"):
-                candidate = find_document_by_path(connection, f"{normalized}.md")
-                if candidate and candidate["entity_type"] == "scene":
-                    return candidate
-
-        if "/" in normalized:
-            document = find_document_by_path(connection, normalized)
-            if document and document["entity_type"] == "scene":
-                return document
-
-    return find_document(connection, scene_name, "scene")
 
 
 def with_file_urls(references: list[dict], base_url: str) -> list[dict]:
@@ -406,9 +413,12 @@ def reindex() -> dict:
 def search_lore(
     q: Annotated[str, Query(min_length=2, description="Search query in Russian or English.")],
     limit: Annotated[int, Query(ge=1, le=25)] = 8,
-    type: Annotated[Optional[str], Query(description="Optional document type filter, e.g. character, location, scene.")] = None,
+    doc_type: Annotated[
+        Optional[str],
+        Query(alias="type", description="Optional document type filter, e.g. character, location, scene."),
+    ] = None,
 ) -> dict:
-    cache_key = ("search", q, limit, type)
+    cache_key = ("search", q, limit, doc_type)
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
@@ -417,9 +427,9 @@ def search_lore(
     try:
         params: list[object] = [fts_query]
         type_clause = ""
-        if type:
+        if doc_type:
             type_clause = "AND c.entity_type = ?"
-            params.append(type)
+            params.append(doc_type)
         params.append(limit)
         rows = connection.execute(
             f"""
@@ -504,6 +514,31 @@ def get_scene_participants_for_document(connection: sqlite3.Connection, document
     return [row["participant"] for row in rows]
 
 
+def participant_matches_request(requested_norm: str, participant_norm: str) -> bool:
+    if not requested_norm or not participant_norm:
+        return False
+    if requested_norm == participant_norm:
+        return True
+    if requested_norm in participant_norm or participant_norm in requested_norm:
+        return True
+
+    requested_tokens = [token for token in requested_norm.split() if len(token) > 2]
+    participant_tokens = set(participant_norm.split())
+    if not requested_tokens:
+        return False
+    return all(token in participant_tokens for token in requested_tokens)
+
+
+def count_matching_participants(requested_names: list[str], participant_norms: set[str]) -> int:
+    matched_requests: set[str] = set()
+    for requested in requested_names:
+        for participant_norm in participant_norms:
+            if participant_matches_request(requested, participant_norm):
+                matched_requests.add(requested)
+                break
+    return len(matched_requests)
+
+
 def get_scene_candidates(
     connection: sqlite3.Connection,
     participant_names: list[str],
@@ -511,7 +546,6 @@ def get_scene_candidates(
     limit: int,
 ) -> list[dict]:
     normalized_requested = [normalize_text(name) for name in participant_names if normalize_text(name)]
-    requested_set = set(normalized_requested)
 
     scene_rows = connection.execute(
         """
@@ -569,11 +603,15 @@ def get_scene_candidates(
     candidates: list[dict] = []
     for record in grouped.values():
         participant_norms = record["participant_norms"]
-        overlap = len(requested_set & participant_norms) if requested_set else len(participant_norms)
-        if requested_set and overlap == 0:
+        overlap = (
+            count_matching_participants(normalized_requested, participant_norms)
+            if normalized_requested
+            else len(participant_norms)
+        )
+        if normalized_requested and overlap == 0:
             continue
 
-        participant_score = overlap / max(1, len(requested_set)) if requested_set else 0.0
+        participant_score = overlap / max(1, len(normalized_requested)) if normalized_requested else 0.0
         text_score = text_scores.get(record["id"], 0.0)
         score = (participant_score * 2.0) + text_score
         candidates.append(
@@ -602,7 +640,7 @@ def build_scene_match_payloads(connection: sqlite3.Connection, candidates: list[
                 "participants": candidate["participants"],
                 "participant_overlap": candidate["participant_overlap"],
                 "score": candidate["score"],
-                "context": get_chunks_for_document(connection, int(candidate["id"]), limit=3),
+                "context": get_section_chunks_for_document(connection, int(candidate["id"]), "Событие", limit=1),
             }
         )
     return payloads
@@ -615,117 +653,85 @@ def get_faction(name: str) -> dict:
     if cached is not None:
         return cached
     query = f"{name} фракция государство дом орден"
-    return cache_set(cache_key, search_lore(query, limit=10, type="lore"))
+    return cache_set(cache_key, search_lore(query, limit=10, doc_type="lore"))
 
 
-@app.get("/scene-context", response_model=SceneContextResponse)
+@app.get("/scene-context", include_in_schema=False)
 def get_scene_context(
     request: Request,
-    characters: Annotated[Optional[str], Query(description="Comma-separated character names.")] = "",
-    location: Annotated[Optional[str], Query(description="Optional location name.")] = None,
-    scene_query: Annotated[Optional[str], Query(description="Freeform scene description to match against scene context.")] = None,
-    scene_name: Annotated[Optional[str], Query(description="Optional scene name or repo path under 01_Кампания.")] = None,
+    characters: Annotated[str, Query(description="Comma-separated character names.")] = "",
+    location: Annotated[str, Query(description="Optional location name.")] = "",
+    scene_query: Annotated[str, Query(description="Freeform scene description to match against scene context.")] = "",
     limit: Annotated[int, Query(ge=1, le=20)] = 12,
 ) -> dict:
     base_url = request_base_url(request)
-    cache_key = ("scene-context", base_url, characters, location, scene_query, scene_name, limit)
+    cache_key = ("scene-context", base_url, characters, location, scene_query, limit)
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
-    names = [part.strip() for part in (characters or "").split(",") if part.strip()]
-    connection = connect()
-    try:
-        scene_payload: SceneSource | None = None
-        scene_document: sqlite3.Row | None = None
-        if scene_name:
-            scene_document = resolve_scene_document(connection, scene_name)
-            if scene_document:
-                metadata = json.loads(scene_document["metadata_json"])
-                branch_path = None
-                if scene_document["path"].startswith("01_Кампания/Ветки/"):
-                    branch_path = str(Path(scene_document["path"]).parent).replace("\\", "/")
-                scene_payload = SceneSource(
-                    request=scene_name,
-                    found=True,
-                    title=scene_document["title"],
-                    path=scene_document["path"],
-                    branch=branch_path,
-                    metadata=metadata,
-                    context=get_chunks_for_document(connection, int(scene_document["id"]), limit=min(limit, 8)),
-                    branch_context=get_branch_context_for_scene(connection, scene_document, limit=limit),
-                )
-            else:
-                scene_payload = SceneSource(request=scene_name, found=False)
-
-        character_payloads = []
-        search_terms = []
-        for name in names:
-            document = find_document(connection, name, "character")
-            if not document:
-                character_payloads.append({"name": name, "found": False})
-                search_terms.append(name)
-                continue
-            character_payloads.append(
-                {
-                    "name": document["title"],
-                    "found": True,
-                    "path": document["path"],
-                    "metadata": json.loads(document["metadata_json"]),
-                    "references": with_file_urls(
-                        get_references_for_document(connection, int(document["id"])),
-                        base_url,
-                    ),
-                    "context": get_chunks_for_document(connection, int(document["id"]), limit=3),
-                }
-            )
-            search_terms.append(document["title"])
-
-        if scene_document:
-            search_terms.append(scene_document["title"])
-            search_terms.append(scene_document["path"])
-            if scene_payload and scene_payload.branch:
-                search_terms.append(scene_payload.branch)
-
-        if location:
-            search_terms.append(location)
-        combined_query = (scene_query or " ".join(search_terms) or characters or location or "").strip()
-
-        candidate_matches: list[dict] = []
-        if not scene_document and (names or (scene_query or "").strip()):
-            candidate_matches = get_scene_candidates(connection, names, combined_query, limit=min(limit, 5))
-    finally:
-        connection.close()
-
+    characters = characters or ""
+    location = location or ""
+    scene_query = scene_query or ""
+    names = split_character_names(characters)
+    character_payloads: list[dict] = []
+    search_terms: list[str] = []
+    candidate_matches: list[dict] = []
+    combined_query = (scene_query or " ".join(search_terms) or " ".join(names) or characters or location or "").strip()
     match_payloads: list[dict] = []
     best_match_context: list[dict] = []
-    if candidate_matches:
-        with connect() as match_connection:
-            match_connection.row_factory = sqlite3.Row
-            match_payloads = build_scene_match_payloads(match_connection, candidate_matches, limit=min(limit, 5))
-            if match_payloads:
-                best_match_context = match_payloads[0]["context"]
+    related_context: list[dict] = []
 
     try:
-        related_context = []
-        if combined_query:
-            search_results = search_lore(combined_query, limit=limit)
-            related_context = search_results["results"]
-        if scene_payload and scene_payload.found:
-            scene_context = [
-                chunk.model_dump() for chunk in (scene_payload.context + scene_payload.branch_context)
-            ]
-            merged_context: list[dict] = []
-            seen: set[tuple[str, str, str]] = set()
-            for chunk in scene_context + related_context:
-                key = (chunk["path"], chunk["heading"], chunk["text"])
-                if key in seen:
+        connection = connect()
+        try:
+            for name in names:
+                document = find_document(connection, name, "character")
+                if not document:
+                    character_payloads.append({"name": name, "found": False})
+                    search_terms.append(name)
                     continue
-                seen.add(key)
-                merged_context.append(chunk)
-                if len(merged_context) >= limit:
-                    break
-            related_context = merged_context
-        elif best_match_context:
+                character_payloads.append(
+                    {
+                        "name": document["title"],
+                        "found": True,
+                        "path": document["path"],
+                        "metadata": json.loads(document["metadata_json"]),
+                    }
+                )
+                search_terms.append(document["title"])
+
+            if location:
+                search_terms.append(location)
+            combined_query = (scene_query or " ".join(search_terms) or " ".join(names) or characters or location or "").strip()
+
+            if names or (scene_query or "").strip() or (location or "").strip():
+                candidate_matches = get_scene_candidates(connection, names, combined_query, limit=min(limit, 5))
+        finally:
+            connection.close()
+
+        try:
+            if candidate_matches:
+                with connect() as match_connection:
+                    match_connection.row_factory = sqlite3.Row
+                    match_payloads = build_scene_match_payloads(match_connection, candidate_matches, limit=min(limit, 5))
+                    if match_payloads:
+                        best_match_context = match_payloads[0]["context"]
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            candidate_matches = []
+            match_payloads = []
+            best_match_context = []
+
+        if combined_query:
+            try:
+                search_results = search_lore(combined_query, limit=limit)
+                related_context = search_results["results"]
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                related_context = []
+        if best_match_context:
             merged_context = []
             seen: set[tuple[str, str, str]] = set()
             for chunk in best_match_context + related_context:
@@ -737,19 +743,39 @@ def get_scene_context(
                 if len(merged_context) >= limit:
                     break
             related_context = merged_context
-    except HTTPException:
-        related_context = (
-            [chunk.model_dump() for chunk in (scene_payload.context + scene_payload.branch_context)]
-            if scene_payload and scene_payload.found
-            else []
-        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+    if not related_context and best_match_context:
+        related_context = [dump_chunk(chunk) for chunk in best_match_context]
+
+    related_context = related_context[: min(limit, 5)]
+
     return cache_set(cache_key, {
-        "scene": scene_payload.model_dump() if scene_payload else None,
-        "scene_matches": match_payloads,
         "characters": character_payloads,
         "location": location,
+        "scene_matches": match_payloads,
         "related_context": related_context,
     })
+
+
+@app.get("/scene_context", response_model=SceneContextResponse)
+def get_scene_context_alias(
+    request: Request,
+    characters: Annotated[str, Query(description="Comma-separated character names.")] = "",
+    location: Annotated[str, Query(description="Optional location name.")] = "",
+    scene_query: Annotated[str, Query(description="Freeform scene description to match against scene context.")] = "",
+    limit: Annotated[int, Query(ge=1, le=20)] = 12,
+) -> dict:
+    return get_scene_context(
+        request=request,
+        characters=characters,
+        location=location,
+        scene_query=scene_query,
+        limit=limit,
+    )
 
 
 @app.get("/files/{path:path}", include_in_schema=False)
