@@ -95,7 +95,29 @@ class SceneCharacter(BaseModel):
     context: list[ChunkResult] = Field(default_factory=list)
 
 
+class SceneSource(BaseModel):
+    request: str
+    found: bool
+    title: Optional[str] = None
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    context: list[ChunkResult] = Field(default_factory=list)
+    branch_context: list[ChunkResult] = Field(default_factory=list)
+
+
+class SceneMatch(BaseModel):
+    title: str
+    path: str
+    participants: list[str] = Field(default_factory=list)
+    participant_overlap: int = 0
+    score: float = 0.0
+    context: list[ChunkResult] = Field(default_factory=list)
+
+
 class SceneContextResponse(BaseModel):
+    scene: Optional[SceneSource] = None
+    scene_matches: list[SceneMatch] = Field(default_factory=list)
     characters: list[SceneCharacter]
     location: Optional[str] = None
     related_context: list[ChunkResult]
@@ -125,11 +147,29 @@ def openapi_json(request: Request) -> dict:
     return build_openapi_schema(request_base_url(request))
 
 
+def index_has_required_tables(connection: sqlite3.Connection) -> bool:
+    required_tables = {"documents", "chunks", "aliases", "asset_refs", "chunks_fts", "scene_participants"}
+    rows = connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type IN ('table', 'view')
+        """
+    ).fetchall()
+    existing = {row["name"] for row in rows}
+    return required_tables.issubset(existing)
+
+
 def connect() -> sqlite3.Connection:
     if not DB_PATH.exists():
         rebuild_index()
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
+    if not index_has_required_tables(connection):
+        connection.close()
+        rebuild_index()
+        connection = sqlite3.connect(DB_PATH)
+        connection.row_factory = sqlite3.Row
     return connection
 
 
@@ -158,6 +198,30 @@ def make_fts_query(query: str) -> str:
     if not tokens:
         raise HTTPException(status_code=400, detail="Query must contain searchable text")
     return " OR ".join(f'"{token}"*' for token in tokens[:12])
+
+
+def normalize_repo_path(value: str) -> str:
+    path = value.strip().replace("\\", "/")
+    if path.startswith("./"):
+        path = path[2:]
+    if path.startswith(str(ROOT).replace("\\", "/")):
+        path = path[len(str(ROOT).replace("\\", "/")) :].lstrip("/")
+    return path.strip("/")
+
+
+def find_document_by_path(connection: sqlite3.Connection, path: str) -> sqlite3.Row | None:
+    normalized = normalize_repo_path(path)
+    if not normalized:
+        return None
+    return connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE path = ?
+        LIMIT 1
+        """,
+        (normalized,),
+    ).fetchone()
 
 
 def find_document(connection: sqlite3.Connection, name: str, entity_type: str | None = None) -> sqlite3.Row | None:
@@ -224,6 +288,91 @@ def get_references_for_document(connection: sqlite3.Connection, document_id: int
         (document_id,),
     ).fetchall()
     return [row_to_dict(row) for row in rows]
+
+
+def get_scene_documents_in_branch(connection: sqlite3.Connection, scene_path: str) -> list[sqlite3.Row]:
+    if not scene_path.startswith("01_Кампания/Ветки/"):
+        return []
+    branch_dir = str(Path(scene_path).parent).replace("\\", "/")
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE entity_type = 'scene' AND path LIKE ?
+        ORDER BY path
+        """,
+        (f"{branch_dir}/%",),
+    ).fetchall()
+    return list(rows)
+
+
+def get_branch_context_for_scene(
+    connection: sqlite3.Connection,
+    scene_document: sqlite3.Row,
+    limit: int,
+) -> list[dict]:
+    branch_documents = get_scene_documents_in_branch(connection, scene_document["path"])
+    if not branch_documents:
+        return []
+
+    try:
+        current_index = next(
+            index for index, document in enumerate(branch_documents) if document["id"] == scene_document["id"]
+        )
+    except StopIteration:
+        return []
+
+    previous_document = branch_documents[current_index - 1] if current_index > 0 else None
+    next_document = branch_documents[current_index + 1] if current_index + 1 < len(branch_documents) else None
+
+    current_limit = min(limit, 8)
+    neighbor_limit = max(1, (limit - current_limit) // 2)
+
+    chunks: list[dict] = []
+    for document, doc_limit in (
+        (previous_document, neighbor_limit),
+        (scene_document, current_limit),
+        (next_document, neighbor_limit),
+    ):
+        if document is None or doc_limit <= 0:
+            continue
+        chunks.extend(get_chunks_for_document(connection, int(document["id"]), limit=doc_limit))
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chunk in chunks:
+        key = (chunk["path"], chunk["heading"], chunk["text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chunk)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def resolve_scene_document(
+    connection: sqlite3.Connection,
+    scene_name: str,
+) -> sqlite3.Row | None:
+    normalized = normalize_repo_path(scene_name)
+    if normalized:
+        if normalized.endswith(".md") or normalized.startswith("01_Кампания/"):
+            document = find_document_by_path(connection, normalized)
+            if document and document["entity_type"] == "scene":
+                return document
+
+            if normalized.startswith("01_Кампания/") and not normalized.endswith(".md"):
+                candidate = find_document_by_path(connection, f"{normalized}.md")
+                if candidate and candidate["entity_type"] == "scene":
+                    return candidate
+
+        if "/" in normalized:
+            document = find_document_by_path(connection, normalized)
+            if document and document["entity_type"] == "scene":
+                return document
+
+    return find_document(connection, scene_name, "scene")
 
 
 def with_file_urls(references: list[dict], base_url: str) -> list[dict]:
@@ -342,6 +491,123 @@ def get_references(character: str, request: Request) -> dict:
         connection.close()
 
 
+def get_scene_participants_for_document(connection: sqlite3.Connection, document_id: int) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT participant
+        FROM scene_participants
+        WHERE document_id = ?
+        ORDER BY id
+        """,
+        (document_id,),
+    ).fetchall()
+    return [row["participant"] for row in rows]
+
+
+def get_scene_candidates(
+    connection: sqlite3.Connection,
+    participant_names: list[str],
+    scene_query: str,
+    limit: int,
+) -> list[dict]:
+    normalized_requested = [normalize_text(name) for name in participant_names if normalize_text(name)]
+    requested_set = set(normalized_requested)
+
+    scene_rows = connection.execute(
+        """
+        SELECT d.id, d.path, d.title, d.metadata_json, sp.participant, sp.participant_norm
+        FROM documents d
+        LEFT JOIN scene_participants sp ON sp.document_id = d.id
+        WHERE d.entity_type = 'scene'
+        ORDER BY d.path, sp.id
+        """,
+    ).fetchall()
+
+    grouped: dict[int, dict[str, Any]] = {}
+    for row in scene_rows:
+        document_id = int(row["id"])
+        record = grouped.setdefault(
+            document_id,
+            {
+                "id": document_id,
+                "path": row["path"],
+                "title": row["title"],
+                "metadata_json": row["metadata_json"],
+                "participants": [],
+                "participant_norms": set(),
+            },
+        )
+        if row["participant"]:
+            record["participants"].append(row["participant"])
+            if row["participant_norm"]:
+                record["participant_norms"].add(row["participant_norm"])
+
+    text_scores: dict[int, float] = {}
+    if scene_query.strip():
+        try:
+            fts_query = make_fts_query(scene_query)
+            rank_rows = connection.execute(
+                """
+                SELECT c.document_id, bm25(chunks_fts) AS score
+                FROM chunks_fts
+                JOIN chunks c ON c.id = chunks_fts.rowid
+                WHERE chunks_fts MATCH ? AND c.entity_type = 'scene'
+                ORDER BY score
+                LIMIT ?
+                """,
+                (fts_query, max(20, limit * 20)),
+            ).fetchall()
+            for index, row in enumerate(rank_rows):
+                document_id = int(row["document_id"])
+                rank_score = 1.0 / (1.0 + index)
+                current = text_scores.get(document_id, 0.0)
+                if rank_score > current:
+                    text_scores[document_id] = rank_score
+        except HTTPException:
+            text_scores = {}
+
+    candidates: list[dict] = []
+    for record in grouped.values():
+        participant_norms = record["participant_norms"]
+        overlap = len(requested_set & participant_norms) if requested_set else len(participant_norms)
+        if requested_set and overlap == 0:
+            continue
+
+        participant_score = overlap / max(1, len(requested_set)) if requested_set else 0.0
+        text_score = text_scores.get(record["id"], 0.0)
+        score = (participant_score * 2.0) + text_score
+        candidates.append(
+            {
+                "id": record["id"],
+                "path": record["path"],
+                "title": record["title"],
+                "metadata_json": record["metadata_json"],
+                "participants": record["participants"],
+                "participant_overlap": overlap,
+                "score": score,
+            }
+        )
+
+    candidates.sort(key=lambda item: (-item["score"], item["path"]))
+    return candidates[:limit]
+
+
+def build_scene_match_payloads(connection: sqlite3.Connection, candidates: list[dict], limit: int) -> list[dict]:
+    payloads: list[dict] = []
+    for candidate in candidates[:limit]:
+        payloads.append(
+            {
+                "title": candidate["title"],
+                "path": candidate["path"],
+                "participants": candidate["participants"],
+                "participant_overlap": candidate["participant_overlap"],
+                "score": candidate["score"],
+                "context": get_chunks_for_document(connection, int(candidate["id"]), limit=3),
+            }
+        )
+    return payloads
+
+
 @app.get("/factions/{name}", response_model=SearchResponse)
 def get_faction(name: str) -> dict:
     cache_key = ("faction", name)
@@ -355,18 +621,42 @@ def get_faction(name: str) -> dict:
 @app.get("/scene-context", response_model=SceneContextResponse)
 def get_scene_context(
     request: Request,
-    characters: Annotated[str, Query(description="Comma-separated character names.")],
+    characters: Annotated[Optional[str], Query(description="Comma-separated character names.")] = "",
     location: Annotated[Optional[str], Query(description="Optional location name.")] = None,
+    scene_query: Annotated[Optional[str], Query(description="Freeform scene description to match against scene context.")] = None,
+    scene_name: Annotated[Optional[str], Query(description="Optional scene name or repo path under 01_Кампания.")] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 12,
 ) -> dict:
     base_url = request_base_url(request)
-    cache_key = ("scene-context", base_url, characters, location, limit)
+    cache_key = ("scene-context", base_url, characters, location, scene_query, scene_name, limit)
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
-    names = [part.strip() for part in characters.split(",") if part.strip()]
+    names = [part.strip() for part in (characters or "").split(",") if part.strip()]
     connection = connect()
     try:
+        scene_payload: SceneSource | None = None
+        scene_document: sqlite3.Row | None = None
+        if scene_name:
+            scene_document = resolve_scene_document(connection, scene_name)
+            if scene_document:
+                metadata = json.loads(scene_document["metadata_json"])
+                branch_path = None
+                if scene_document["path"].startswith("01_Кампания/Ветки/"):
+                    branch_path = str(Path(scene_document["path"]).parent).replace("\\", "/")
+                scene_payload = SceneSource(
+                    request=scene_name,
+                    found=True,
+                    title=scene_document["title"],
+                    path=scene_document["path"],
+                    branch=branch_path,
+                    metadata=metadata,
+                    context=get_chunks_for_document(connection, int(scene_document["id"]), limit=min(limit, 8)),
+                    branch_context=get_branch_context_for_scene(connection, scene_document, limit=limit),
+                )
+            else:
+                scene_payload = SceneSource(request=scene_name, found=False)
+
         character_payloads = []
         search_terms = []
         for name in names:
@@ -390,18 +680,72 @@ def get_scene_context(
             )
             search_terms.append(document["title"])
 
+        if scene_document:
+            search_terms.append(scene_document["title"])
+            search_terms.append(scene_document["path"])
+            if scene_payload and scene_payload.branch:
+                search_terms.append(scene_payload.branch)
+
         if location:
             search_terms.append(location)
-        combined_query = " ".join(search_terms) or characters
+        combined_query = (scene_query or " ".join(search_terms) or characters or location or "").strip()
+
+        candidate_matches: list[dict] = []
+        if not scene_document and (names or (scene_query or "").strip()):
+            candidate_matches = get_scene_candidates(connection, names, combined_query, limit=min(limit, 5))
     finally:
         connection.close()
 
+    match_payloads: list[dict] = []
+    best_match_context: list[dict] = []
+    if candidate_matches:
+        with connect() as match_connection:
+            match_connection.row_factory = sqlite3.Row
+            match_payloads = build_scene_match_payloads(match_connection, candidate_matches, limit=min(limit, 5))
+            if match_payloads:
+                best_match_context = match_payloads[0]["context"]
+
     try:
-        search_results = search_lore(combined_query, limit=limit)
-        related_context = search_results["results"]
-    except HTTPException:
         related_context = []
+        if combined_query:
+            search_results = search_lore(combined_query, limit=limit)
+            related_context = search_results["results"]
+        if scene_payload and scene_payload.found:
+            scene_context = [
+                chunk.model_dump() for chunk in (scene_payload.context + scene_payload.branch_context)
+            ]
+            merged_context: list[dict] = []
+            seen: set[tuple[str, str, str]] = set()
+            for chunk in scene_context + related_context:
+                key = (chunk["path"], chunk["heading"], chunk["text"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_context.append(chunk)
+                if len(merged_context) >= limit:
+                    break
+            related_context = merged_context
+        elif best_match_context:
+            merged_context = []
+            seen: set[tuple[str, str, str]] = set()
+            for chunk in best_match_context + related_context:
+                key = (chunk["path"], chunk["heading"], chunk["text"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_context.append(chunk)
+                if len(merged_context) >= limit:
+                    break
+            related_context = merged_context
+    except HTTPException:
+        related_context = (
+            [chunk.model_dump() for chunk in (scene_payload.context + scene_payload.branch_context)]
+            if scene_payload and scene_payload.found
+            else []
+        )
     return cache_set(cache_key, {
+        "scene": scene_payload.model_dump() if scene_payload else None,
+        "scene_matches": match_payloads,
         "characters": character_payloads,
         "location": location,
         "related_context": related_context,

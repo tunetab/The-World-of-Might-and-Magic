@@ -163,6 +163,38 @@ def iter_chunks(body: str, max_chars: int = 1800, overlap: int = 220) -> Iterabl
         yield current_heading, current
 
 
+def extract_section_items(body: str, section_name: str) -> list[str]:
+    lines = body.splitlines()
+    in_section = False
+    items: list[str] = []
+    target = section_name.strip().lower()
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            heading = line[3:].strip().lower()
+            if in_section:
+                break
+            in_section = heading == target
+            continue
+        if not in_section:
+            continue
+        if line.startswith("# "):
+            break
+        if line.startswith("-"):
+            item = line.lstrip("-*• \t").strip()
+            item = item.rstrip(".;")
+            if item:
+                items.append(item)
+    return items
+
+
+def extract_scene_participants(body: str) -> list[str]:
+    return extract_section_items(body, "Участники")
+
+
 def find_portrait_assets(doc: SourceDocument, root: Path = ROOT) -> list[dict[str, str]]:
     assets: list[dict[str, str]] = []
     portrait = doc.metadata.get("portrait")
@@ -208,6 +240,7 @@ def init_schema(connection: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS chunks;
         DROP TABLE IF EXISTS aliases;
         DROP TABLE IF EXISTS asset_refs;
+        DROP TABLE IF EXISTS scene_participants;
         DROP TABLE IF EXISTS chunks_fts;
 
         CREATE TABLE documents (
@@ -255,6 +288,13 @@ def init_schema(connection: sqlite3.Connection) -> None:
             priority TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TABLE scene_participants (
+            id INTEGER PRIMARY KEY,
+            document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            participant TEXT NOT NULL,
+            participant_norm TEXT NOT NULL
+        );
         """
     )
 
@@ -301,6 +341,19 @@ def insert_document(connection: sqlite3.Connection, doc: SourceDocument, root: P
             "INSERT INTO chunks_fts(rowid, title, heading, text, path) VALUES (?, ?, ?, ?, ?)",
             (chunk_id, doc.title, heading, text, doc.rel_path),
         )
+
+    if entity_type == "scene":
+        for participant in extract_scene_participants(doc.body):
+            norm = normalize_text(participant)
+            if not norm:
+                continue
+            connection.execute(
+                """
+                INSERT INTO scene_participants(document_id, participant, participant_norm)
+                VALUES (?, ?, ?)
+                """,
+                (document_id, participant, norm),
+            )
 
     if entity_type == "character":
         for asset in find_portrait_assets(doc, root):
