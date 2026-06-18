@@ -3,14 +3,14 @@
     "status":  "active",
     "canon_level":  "support",
     "current_chapter":  3,
-    "updated_real_date":  "2026-06-16",
+    "updated_real_date":  "2026-06-17",
     "generated_from":  [
                            "09_Реестры/Вопросы.json"
                        ],
-    "count":  78,
+    "count":  77,
     "counts":  {
-                   "total":  78,
-                   "active":  28,
+                   "total":  77,
+                   "active":  27,
                    "waiting":  29,
                    "later":  21
                },
@@ -406,14 +406,6 @@
                           "owner":  "Кланы Закона / Урион / Каролина / Аракхен / Порт-Лабад / руины Шантири",
                           "scope":  "world",
                           "status":  "waiting"
-                      },
-                      {
-                          "id":  "Q-WORLD-026",
-                          "priority":  "средний",
-                          "text":  "Как клан коневодов Теодена и Эовин Пламя степи соотносятся с остальными кланами варваров, особенно с их доктриной о том, что дипломатии нет места среди воинов?",
-                          "owner":  "Кланы варваров / Теоден / Эовин",
-                          "scope":  "world",
-                          "status":  "active"
                       },
                       {
                           "id":  "Q-WORLD-027",
