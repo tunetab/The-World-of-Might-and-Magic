@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -45,8 +46,25 @@ def slugify(value: str) -> str:
     return normalized.strip("_")
 
 
+def make_file_id(rel_path: str) -> str:
+    digest = hashlib.blake2s(rel_path.encode("utf-8"), digest_size=8).hexdigest()
+    return f"f_{digest}"
+
+
 def read_markdown_files(root: Path = ROOT) -> Iterable[Path]:
     for path in root.rglob("*.md"):
+        rel_parts = path.relative_to(root).parts
+        if any(part in IGNORED_DIRS for part in rel_parts):
+            continue
+        if any(part.startswith(".") for part in rel_parts):
+            continue
+        yield path
+
+
+def read_repository_files(root: Path = ROOT) -> Iterable[Path]:
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
         rel_parts = path.relative_to(root).parts
         if any(part in IGNORED_DIRS for part in rel_parts):
             continue
@@ -241,6 +259,7 @@ def init_schema(connection: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS aliases;
         DROP TABLE IF EXISTS asset_refs;
         DROP TABLE IF EXISTS scene_participants;
+        DROP TABLE IF EXISTS file_links;
         DROP TABLE IF EXISTS chunks_fts;
 
         CREATE TABLE documents (
@@ -294,6 +313,11 @@ def init_schema(connection: sqlite3.Connection) -> None:
             document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             participant TEXT NOT NULL,
             participant_norm TEXT NOT NULL
+        );
+
+        CREATE TABLE file_links (
+            file_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE
         );
         """
     )
@@ -374,6 +398,16 @@ def insert_document(connection: sqlite3.Connection, doc: SourceDocument, root: P
     return document_id
 
 
+def insert_file_link(connection: sqlite3.Connection, rel_path: str) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO file_links(file_id, path)
+        VALUES (?, ?)
+        """,
+        (make_file_id(rel_path), rel_path),
+    )
+
+
 def rebuild_index(root: Path = ROOT, db_path: Path = DB_PATH) -> dict[str, int | str]:
     connection = connect(db_path)
     try:
@@ -383,6 +417,8 @@ def rebuild_index(root: Path = ROOT, db_path: Path = DB_PATH) -> dict[str, int |
             doc = load_document(path, root)
             insert_document(connection, doc, root)
             document_count += 1
+        for path in sorted(read_repository_files(root)):
+            insert_file_link(connection, path.relative_to(root).as_posix())
         chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         reference_count = connection.execute("SELECT COUNT(*) FROM asset_refs").fetchone()[0]
         connection.commit()

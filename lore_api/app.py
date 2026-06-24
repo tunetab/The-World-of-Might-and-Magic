@@ -5,14 +5,13 @@ import re
 import sqlite3
 from pathlib import Path
 from typing import Annotated, Any, Optional
-from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .indexer import DB_PATH, ROOT, rebuild_index, slugify, normalize_text
+from .indexer import DB_PATH, ROOT, make_file_id, rebuild_index, slugify, normalize_text
 
 
 RESPONSE_CACHE: dict[tuple[Any, ...], dict] = {}
@@ -112,6 +111,7 @@ class SceneMatch(BaseModel):
     participants: list[str] = Field(default_factory=list)
     participant_overlap: int = 0
     score: float = 0.0
+    scene_characters: list[SceneCharacter] = Field(default_factory=list)
     context: list[ChunkResult] = Field(default_factory=list)
 
 
@@ -147,7 +147,7 @@ def openapi_json(request: Request) -> dict:
 
 
 def index_has_required_tables(connection: sqlite3.Connection) -> bool:
-    required_tables = {"documents", "chunks", "aliases", "asset_refs", "chunks_fts", "scene_participants"}
+    required_tables = {"documents", "chunks", "aliases", "asset_refs", "chunks_fts", "scene_participants", "file_links"}
     rows = connection.execute(
         """
         SELECT name
@@ -386,7 +386,7 @@ def with_file_urls(references: list[dict], base_url: str) -> list[dict]:
     payload = []
     for reference in references:
         item = dict(reference)
-        item["url"] = f"{base_url}/files/{quote(item['path'])}"
+        item["url"] = f"{base_url}/files/{make_file_id(item['path'])}"
         item["download_url"] = item["url"]
         payload.append(item)
     return payload
@@ -514,6 +514,48 @@ def get_scene_participants_for_document(connection: sqlite3.Connection, document
     return [row["participant"] for row in rows]
 
 
+def collect_scene_participant_names(candidates: list[dict]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        for participant in candidate.get("participants", []):
+            normalized = normalize_text(participant)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            names.append(participant)
+    return names
+
+
+def build_scene_character_payload(
+    connection: sqlite3.Connection,
+    base_url: str,
+    name: str,
+    include_details: bool = True,
+) -> dict:
+    document = find_document(connection, name, "character")
+    if not document:
+        return {"name": name, "found": False}
+    payload = {
+        "name": document["title"],
+        "found": True,
+        "path": document["path"],
+    }
+    if include_details:
+        metadata = json.loads(document["metadata_json"])
+        payload.update(
+            {
+                "metadata": metadata,
+                "references": with_file_urls(
+                    get_references_for_document(connection, int(document["id"])),
+                    base_url,
+                ),
+                "context": get_chunks_for_document(connection, int(document["id"])),
+            }
+        )
+    return payload
+
+
 def participant_matches_request(requested_norm: str, participant_norm: str) -> bool:
     if not requested_norm or not participant_norm:
         return False
@@ -630,16 +672,50 @@ def get_scene_candidates(
     return candidates[:limit]
 
 
-def build_scene_match_payloads(connection: sqlite3.Connection, candidates: list[dict], limit: int) -> list[dict]:
+def build_scene_character_payloads(
+    connection: sqlite3.Connection,
+    base_url: str,
+    names: list[str],
+) -> list[dict]:
+    payloads: list[dict] = []
+    seen: set[str] = set()
+    for name in names:
+        normalized = normalize_text(name)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        payloads.append(build_scene_character_payload(connection, base_url, name))
+    return payloads
+
+
+def build_scene_character_summaries(
+    connection: sqlite3.Connection,
+    base_url: str,
+    names: list[str],
+) -> list[dict]:
+    payloads: list[dict] = []
+    seen: set[str] = set()
+    for name in names:
+        normalized = normalize_text(name)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        payloads.append(build_scene_character_payload(connection, base_url, name, include_details=False))
+    return payloads
+
+
+def build_scene_match_payloads(connection: sqlite3.Connection, base_url: str, candidates: list[dict], limit: int) -> list[dict]:
     payloads: list[dict] = []
     for candidate in candidates[:limit]:
+        participant_names = candidate["participants"]
         payloads.append(
             {
                 "title": candidate["title"],
                 "path": candidate["path"],
-                "participants": candidate["participants"],
+                "participants": participant_names,
                 "participant_overlap": candidate["participant_overlap"],
                 "score": candidate["score"],
+                "scene_characters": build_scene_character_summaries(connection, base_url, participant_names),
                 "context": get_section_chunks_for_document(connection, int(candidate["id"]), "Событие", limit=1),
             }
         )
@@ -713,7 +789,7 @@ def get_scene_context(
             if candidate_matches:
                 with connect() as match_connection:
                     match_connection.row_factory = sqlite3.Row
-                    match_payloads = build_scene_match_payloads(match_connection, candidate_matches, limit=min(limit, 5))
+                    match_payloads = build_scene_match_payloads(match_connection, base_url, candidate_matches, limit=min(limit, 5))
                     if match_payloads:
                         best_match_context = match_payloads[0]["context"]
         except Exception:
@@ -778,9 +854,23 @@ def get_scene_context_alias(
     )
 
 
-@app.get("/files/{path:path}", include_in_schema=False)
-def get_file(path: str):
-    target = (ROOT / path).resolve()
+@app.get("/files/{file_id:path}", include_in_schema=False)
+def get_file(file_id: str):
+    path = file_id
+    if "/" not in file_id:
+        with connect() as connection:
+            row = connection.execute(
+                """
+                SELECT path
+                FROM file_links
+                WHERE file_id = ?
+                LIMIT 1
+                """,
+                (file_id,),
+            ).fetchone()
+            if row:
+                path = row["path"]
+    target = (ROOT / normalize_repo_path(path)).resolve()
     if ROOT not in target.parents and target != ROOT:
         raise HTTPException(status_code=400, detail="Path escapes repository root")
     if not target.exists() or not target.is_file():
