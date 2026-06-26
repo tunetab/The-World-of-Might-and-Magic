@@ -2,7 +2,7 @@
     "type":  "decision_registry",
     "status":  "active",
     "canon_level":  "support",
-    "updated_real_date":  "2026-06-24",
+    "updated_real_date":  "2026-06-25",
     "generated_from":  [
                            "01_Кампания/02_Журнал_решений.md",
                            "01_Кампания/03_Нерешенные_вопросы.md"
