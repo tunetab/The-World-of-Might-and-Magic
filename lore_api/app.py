@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
-from .face_lock_store import FaceLockStore, FaceLockStoreError, safe_name
+from .face_lock_store import FaceLockStore, FaceLockStoreError
 from .indexer import DB_PATH, ROOT, make_file_id, rebuild_index, slugify, normalize_text
 
 
@@ -108,6 +108,7 @@ class FaceLockLookupResponse(BaseModel):
     canonical_portraits: list[FaceLockReferenceResponse]
     has_face_lock: bool
     recommended_variants: list[str]
+    required_sections: list[str]
     generation_prompts: dict[str, str]
 
 
@@ -129,13 +130,14 @@ class FaceLockStoreResponse(BaseModel):
 
 
 class FaceLockStoreRequest(BaseModel):
-    variants: list[str] = Field(default_factory=lambda: ["front"])
     openaiFileIdRefs: list[str] = Field(
-        default_factory=list,
+        min_length=1,
+        max_length=1,
         description=(
-            "One generated ChatGPT image per variant. ChatGPT Actions replaces each "
-            "string with a runtime file-reference object containing name, id, mime_type, "
-            "and a temporary download_link."
+            "Exactly one generated composite face-lock image. The image contains five "
+            "sections: profile, three-quarter, front, anger, and laughter. ChatGPT Actions "
+            "replaces the string with a runtime file-reference object containing name, id, "
+            "mime_type, and a temporary download_link."
         ),
     )
     overwrite_repository_files: bool = False
@@ -400,8 +402,21 @@ def get_references_for_document(connection: sqlite3.Connection, document_id: int
     return [row_to_dict(row) for row in rows]
 
 
+def repository_file_exists(relative_path: str) -> bool:
+    candidate = (ROOT / relative_path).resolve()
+    try:
+        candidate.relative_to(ROOT)
+    except ValueError:
+        return False
+    return candidate.exists()
+
+
 def face_lock_references(references: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [reference for reference in references if reference.get("type") == "face_lock"]
+    return [
+        reference
+        for reference in references
+        if reference.get("type") == "face_lock" and repository_file_exists(str(reference.get("path", "")))
+    ]
 
 
 def canonical_portrait_references(references: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -409,6 +424,7 @@ def canonical_portrait_references(references: list[dict[str, Any]]) -> list[dict
         reference
         for reference in references
         if reference.get("type") in {"main_portrait", "portrait"}
+        and repository_file_exists(str(reference.get("path", "")))
     ]
     return sorted(
         image_references,
@@ -612,43 +628,36 @@ def get_references(character: str, request: Request) -> dict:
         connection.close()
 
 
-FACE_LOCK_VARIANT_DIRECTIONS = {
-    "front": (
-        "front-facing at eye level, symmetrical head position, neutral serious expression, "
-        "eyes looking toward the camera"
-    ),
-    "three_quarter": (
-        "three-quarter view at roughly 35 degrees, eye-level camera, neutral serious expression, "
-        "both eyes still clearly visible"
-    ),
-    "profile": (
-        "clean side profile at roughly 90 degrees, eye-level camera, neutral serious expression"
-    ),
-}
+FACE_LOCK_VARIANT = "composite"
+FACE_LOCK_SECTIONS = ["profile", "three_quarter", "front", "anger", "laughter"]
 
 
-def build_face_lock_prompt(character: str, variant: str) -> str:
-    direction = FACE_LOCK_VARIANT_DIRECTIONS.get(
-        variant,
-        f"a clean identity-study view described as {variant}",
-    )
+def build_face_lock_prompt(character: str) -> str:
     return f"""
-Edit Image 1 into one clean photorealistic identity reference for {character}.
+Edit Image 1 into one clean photorealistic composite identity reference for {character}.
 
 Identity is the highest priority. Preserve the exact same person: facial bone structure,
 face proportions, eye shape and spacing, eyebrows, nose, lips, cheekbones, jawline,
 age, skin texture, hairline, hair, facial hair, and distinctive asymmetries.
 Do not beautify, rejuvenate, average, redesign, or substitute the face.
 
-View: {direction}.
-Framing: one head-and-shoulders portrait, face large and unobstructed in frame.
-Lighting: soft neutral studio light that reveals facial geometry and skin texture.
-Background: plain dark neutral background.
+Create exactly one image divided into exactly five clean portrait sections. From left to right:
+1) neutral side profile at roughly 90 degrees;
+2) neutral three-quarter view at roughly 35 degrees, with both eyes visible;
+3) neutral front view at eye level, symmetrical head position, eyes toward the camera;
+4) front view with a natural angry expression;
+5) front view with a natural laughing expression.
+
+Every section must show the same person, not five similar people. Keep identical facial identity,
+age, hair, facial hair, costume, camera height, portrait scale, soft neutral studio lighting,
+and plain dark neutral background across all five sections. Use head-and-shoulders framing with
+the face large and unobstructed in every section.
+
 Output purpose: reusable identity reference for later image edits.
 
-Change only pose, camera angle, background, and neutral studio lighting as needed.
-No collage, no contact sheet, no duplicated face, no inset crops, no text, no borders,
-no costume redesign, no jewelry additions, no stylization, no cinematic color grading.
+No title, labels, captions, letters, numbers, logos, watermark, UI, decorative frame, or other text.
+No extra portraits, inset crops, eye close-ups, or background people. No costume redesign,
+jewelry additions, stylization, beautification, or cinematic color grading.
 """.strip()
 
 
@@ -685,10 +694,10 @@ def get_face_locks(character: str, request: Request) -> dict:
             "face_locks": locks,
             "canonical_portraits": canonical,
             "has_face_lock": bool(locks),
-            "recommended_variants": ["front", "three_quarter"],
+            "recommended_variants": [FACE_LOCK_VARIANT],
+            "required_sections": FACE_LOCK_SECTIONS,
             "generation_prompts": {
-                variant: build_face_lock_prompt(document["title"], variant)
-                for variant in ("front", "three_quarter")
+                FACE_LOCK_VARIANT: build_face_lock_prompt(document["title"])
             },
         }
     finally:
@@ -703,10 +712,6 @@ def store_face_locks(
     _: Annotated[None, Depends(require_write_token)],
 ) -> dict:
     base_url = request_base_url(request)
-    variants = [safe_name(variant.lower()) for variant in payload.variants if variant.strip()]
-    variants = list(dict.fromkeys(variants))
-    if not variants or len(variants) > 3:
-        raise HTTPException(status_code=400, detail="Provide between one and three face-lock variants")
 
     connection = connect()
     try:
@@ -714,27 +719,16 @@ def store_face_locks(
     finally:
         connection.close()
 
-    if not payload.openaiFileIdRefs:
-        raise HTTPException(
-            status_code=400,
-            detail="Attach generated face-lock images through openaiFileIdRefs",
-        )
-    if len(payload.openaiFileIdRefs) != len(variants):
-        raise HTTPException(
-            status_code=400,
-            detail="The number of variants must match the number of attached images",
-        )
-
     try:
         uploads = FACE_LOCK_STORE.cache_action_files(
             action_file_dicts(payload.openaiFileIdRefs)
         )
     except FaceLockStoreError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    if len(uploads) != len(variants):
+    if len(uploads) != 1:
         raise HTTPException(
             status_code=400,
-            detail="Each variant must use a different attached image",
+            detail="Attach exactly one composite face-lock image",
         )
 
     character_folder = Path(document["path"]).stem
@@ -743,14 +737,14 @@ def store_face_locks(
         saved_files = FACE_LOCK_STORE.save_many_to_repository(
             character_folder=character_folder,
             character_file_stem=character_folder,
-            variant_uploads=list(zip(variants, uploads)),
+            variant_uploads=[(FACE_LOCK_VARIANT, uploads[0])],
             overwrite=payload.overwrite_repository_files,
         )
     except FaceLockStoreError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
     for variant, upload, (repository_path, repository_cache_hit) in zip(
-        variants,
+        [FACE_LOCK_VARIANT],
         uploads,
         saved_files,
     ):

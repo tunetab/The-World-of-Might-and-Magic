@@ -8,7 +8,13 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from lore_api.app import FaceLockStoreRequest, action_file_dicts, require_write_token
+import lore_api.app as app_module
+from lore_api.app import (
+    FaceLockStoreRequest,
+    action_file_dicts,
+    build_face_lock_prompt,
+    require_write_token,
+)
 from lore_api.face_lock_store import (
     CachedUpload,
     FaceLockStore,
@@ -53,7 +59,6 @@ class FaceLockStoreTests(unittest.TestCase):
     def test_chatgpt_runtime_file_object_matches_string_openapi_field(self) -> None:
         payload = FaceLockStoreRequest.model_validate(
             {
-                "variants": ["front"],
                 "openaiFileIdRefs": [
                     {
                         "name": "generated.png",
@@ -69,6 +74,29 @@ class FaceLockStoreTests(unittest.TestCase):
 
         self.assertEqual(parsed[0]["id"], "file-test")
         self.assertEqual(parsed[0]["mime_type"], "image/png")
+
+    def test_face_lock_request_requires_exactly_one_composite_file(self) -> None:
+        file_ref = {
+            "name": "generated.png",
+            "id": "file-test",
+            "mime_type": "image/png",
+            "download_link": "https://files.oaiusercontent.com/generated.png",
+        }
+
+        with self.assertRaises(ValueError):
+            FaceLockStoreRequest.model_validate({"openaiFileIdRefs": []})
+        with self.assertRaises(ValueError):
+            FaceLockStoreRequest.model_validate(
+                {"openaiFileIdRefs": [file_ref, file_ref]}
+            )
+
+    def test_composite_prompt_requests_all_sections_without_text(self) -> None:
+        prompt = build_face_lock_prompt("Test Character")
+
+        for section in ("profile", "three-quarter", "front", "angry", "laughing"):
+            self.assertIn(section, prompt)
+        self.assertIn("exactly one image", prompt)
+        self.assertIn("No title, labels, captions", prompt)
 
     def test_action_upload_is_cached_by_content_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -229,6 +257,63 @@ class FaceLockStoreTests(unittest.TestCase):
             self.assertEqual(len(assets), 1)
             self.assertEqual(assets[0]["type"], "face_lock")
             self.assertEqual(assets[0]["priority"], "primary")
+
+    def test_get_face_locks_omits_missing_repository_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical_path = (
+                root
+                / "11_Медиа"
+                / "Портреты_персонажей"
+                / "Test"
+                / "Test_основной_портрет.png"
+            )
+            canonical_path.parent.mkdir(parents=True)
+            canonical_path.write_bytes(PNG_BYTES)
+
+            document = {"title": "Test Character", "path": "03_Персонажи/Test_Character.md"}
+            references = [
+                {
+                    "type": "face_lock",
+                    "path": "11_Медиа/Портреты_персонажей/Test_Character/Face_Lock/Test_Character_face_lock_front.png",
+                    "priority": "primary",
+                    "description": "",
+                },
+                {
+                    "type": "main_portrait",
+                    "path": "11_Медиа/Портреты_персонажей/Test/Test_основной_портрет.png",
+                    "priority": "primary",
+                    "description": "",
+                },
+            ]
+
+            class FakeConnection:
+                def close(self) -> None:
+                    return None
+
+            with patch.object(app_module, "ROOT", root), patch.object(
+                app_module,
+                "character_document_and_references",
+                return_value=(document, references),
+            ), patch.object(
+                app_module,
+                "request_base_url",
+                return_value="http://example.com",
+            ), patch.object(
+                app_module,
+                "connect",
+                return_value=FakeConnection(),
+            ):
+                response = app_module.get_face_locks("Test Character", request=None)  # type: ignore[arg-type]
+                self.assertEqual(app_module.face_lock_references(references), [])
+            self.assertFalse(response["has_face_lock"])
+            self.assertEqual(response["face_locks"], [])
+            self.assertEqual(
+                response["required_sections"],
+                ["profile", "three_quarter", "front", "anger", "laughter"],
+            )
+            self.assertEqual(response["recommended_variants"], ["composite"])
+            self.assertEqual(list(response["generation_prompts"]), ["composite"])
 
 
 if __name__ == "__main__":
