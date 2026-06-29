@@ -4,28 +4,43 @@
 type: technical_readme
 status: active
 canon_level: support
-updated_real_date: 2026-05-16
+updated_real_date: 2026-06-28
 ---
 
 Эта папка нужна, чтобы ChatGPT мог получать лор, карточки персонажей и ссылки на портреты из этого репозитория через отдельный API.
 
 Проще говоря: репозиторий остается главным хранилищем канона, а Lore API становится удобным "окошком" для ChatGPT. Вместо того чтобы загружать в чат все файлы сразу, ChatGPT сможет спросить: "дай карточку Михаэля", "найди контекст по Белой Гавани", "дай портретные референсы Картоса".
 
-Важно про изображения: Lore API не прикрепляет PNG/JPG к генератору. Он отдает метаданные референсов и ссылки. Для максимальной похожести лиц Custom GPT должен попросить пользователя открыть ссылку на портрет и прикрепить этот портрет в чат как изображение.
+Важно про изображения: генерацию выполняет встроенный Image Generation в ChatGPT по пользовательской подписке. Lore API не вызывает OpenAI Images API, не требует `OPENAI_API_KEY` и не расходует отдельные API-токены. Он отдает ссылки на референсы, принимает уже созданные в чате face lock через `openaiFileIdRefs`, кеширует их по SHA-256 и сохраняет в репозиторий.
 
 ## Что уже работает
 
 - поиск по Markdown-файлам проекта;
 - выдача карточки персонажа по имени;
 - выдача метаданных основного портрета, промпта портрета и ссылок на файлы;
+- поиск сохраненных face lock и выдача готовых промптов для front/three-quarter вариантов;
+- прием сгенерированных ChatGPT изображений через `/face-locks/{character}/store`;
+- кеширование одинаковых face lock без создания дубликатов;
 - выдача `download_url` через временный Lore API/ngrok без GitHub-авторизации;
 - подбор контекста сцены по персонажам и локации;
 - endpoint `/openapi.json` для подключения как ChatGPT Action;
 - ручная пересборка индекса через `/reindex`.
 
-Это не меняет канон и не редактирует сюжетные файлы. API только читает проект и собирает поисковый индекс.
+Это не меняет канон и не редактирует сюжетные файлы. Все endpoint-ы чтения только индексируют проект; единственная разрешенная запись — утвержденные пользователем файлы в подпапку `Face_Lock`.
 
 API кэширует повторяющиеся запросы в памяти процесса. Если Custom GPT несколько раз спросит одного и того же персонажа или те же references, сервер отдаст готовый ответ из кэша. Кэш очищается при `/reindex` и при перезапуске сервера.
+
+Бинарные вложения face lock имеют отдельный дисковый кеш:
+
+```text
+lore_api/.data/face_lock_cache
+```
+
+Он не попадает в Git. Утвержденные face lock сохраняются в:
+
+```text
+11_Медиа/Портреты_персонажей/Имя_Персонажа/Face_Lock
+```
 
 ## Важная идея
 
@@ -143,6 +158,7 @@ python -m lore_api.indexer
 6. Запустить API:
 
 ```bash
+export LORE_WRITE_TOKEN="длинный-случайный-секрет"
 uvicorn lore_api.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -165,7 +181,7 @@ http://127.0.0.1:8010/health
 Если все хорошо, появится что-то вроде:
 
 ```json
-{"status":"ok","index_exists":true}
+{"status":"ok","index_exists":true,"face_lock_writes_enabled":true}
 ```
 
 Еще полезные адреса для проверки:
@@ -174,6 +190,7 @@ http://127.0.0.1:8010/health
 http://127.0.0.1:8010/search?q=Михаэль%20Белая%20Гавань
 http://127.0.0.1:8010/characters/Принц%20Михаэль
 http://127.0.0.1:8010/references/Принц%20Михаэль
+http://127.0.0.1:8010/face-locks/Принц%20Михаэль
 http://127.0.0.1:8010/scene-context?characters=Принц%20Михаэль,Капитан%20Картос&location=Белая%20Гавань
 http://127.0.0.1:8010/openapi.json
 ```
@@ -188,6 +205,7 @@ http://127.0.0.1:8010/openapi.json
 cd /Users/sergeipanov/The-World-of-Might-and-Magic-Fork
 source lore_api/.venv/bin/activate
 python -m lore_api.indexer
+export LORE_WRITE_TOKEN="тот-же-секрет"
 uvicorn lore_api.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -233,6 +251,31 @@ uvicorn lore_api.app:app --host 127.0.0.1 --port 8010
 `url` / `download_url` - временная ссылка через запущенный Lore API и ngrok. Обычно это короткий opaque ID, а не путь с кириллицей. Она не требует авторизации GitHub, пока сервер и ngrok работают.
 
 Самый простой временный вариант без авторизации GitHub - использовать `download_url`: открыть ссылку, скачать или скопировать изображение и прикрепить его в чат.
+
+`/face-locks/{character}`
+
+Возвращает сохраненные face lock, канонические портреты и два рекомендуемых промпта для создания отдельных референсов:
+
+- `front`;
+- `three_quarter`.
+
+Если `has_face_lock: true`, новый face lock по умолчанию не генерируется. GPT показывает пользователю `download_url`, пользователь прикрепляет нужный файл в чат, и только после этого изображение считается реальным identity input.
+
+`POST /face-locks/{character}/store`
+
+Принимает уже созданные встроенным генератором ChatGPT изображения через обязательное поле `openaiFileIdRefs`. Lore API:
+
+1. скачивает временное вложение только с HTTPS-хоста OpenAI;
+2. проверяет формат и лимит 20 МБ;
+3. кеширует содержимое по SHA-256;
+4. сохраняет утвержденный файл в папку `Face_Lock`;
+5. пересобирает индекс, чтобы следующий `/face-locks` сразу увидел файл.
+
+Количество значений в `variants` должно совпадать с количеством вложений. По умолчанию используется один вариант `front`. Замена существующего варианта запрещена, пока явно не передано `overwrite_repository_files: true`.
+
+Lore API не генерирует изображение внутри этого endpoint и не обращается к платному OpenAI API.
+
+Endpoint записи закрыт заголовком `X-Lore-Write-Token`. Если переменная `LORE_WRITE_TOKEN` не задана, `/health` вернет `face_lock_writes_enabled: false`, а сохранение будет отключено. В настройках Custom GPT Action выбери API Key с типом `Custom`, header `X-Lore-Write-Token` и укажи тот же секрет. Не сохраняй секрет в репозитории.
 
 `/scene-context`  
 Совместимый alias для старых скриптов и ручного `curl`: `/scene_context`
@@ -285,6 +328,7 @@ https://lore-api.example.com
 cd /Users/sergeipanov/The-World-of-Might-and-Magic
 source lore_api/.venv/bin/activate
 python -m lore_api.indexer
+export LORE_WRITE_TOKEN="тот-же-секрет"
 uvicorn lore_api.app:app --host 127.0.0.1 --port 8010
 ```
 
@@ -325,7 +369,7 @@ https://random-name.ngrok-free.app/health
 Если все работает, появится ответ:
 
 ```json
-{"status":"ok","index_exists":true}
+{"status":"ok","index_exists":true,"face_lock_writes_enabled":true}
 ```
 
 ### Что вставить в Custom GPT Actions
@@ -334,7 +378,7 @@ https://random-name.ngrok-free.app/health
 Schema URL: https://random-name.ngrok-free.app/openapi.json
 ```
 
-Authentication можно оставить выключенной.
+В Authentication выбери API Key, тип `Custom`, header `X-Lore-Write-Token` и значение из `LORE_WRITE_TOKEN`. Читающие endpoint-ы останутся доступными, а запись face lock будет защищена.
 
 Если ChatGPT пишет `Не удалось найти действительный URL в servers`, проверь две вещи:
 
@@ -463,18 +507,20 @@ https://subarctic-crinkly-saddlebag.ngrok-free.dev/openapi.json
 
 - текстовую карточку персонажа из `/characters/{name}`;
 - metadata визуальных референсов из `/references/{character}`;
+- сохраненные identity references из `/face-locks/{character}`;
 - контекст сцены из `/scene-context`;
 - запасную ссылку на главный портрет через `download_url` из `references`.
 
-В базе не хранятся сами картинки. API хранит и отдает пути, описания и ссылки.
+Поисковая база хранит metadata и пути. Сами утвержденные изображения лежат в репозитории, а повторно присланные из ChatGPT вложения дедуплицируются в локальном кеше по SHA-256.
 
 Практическая схема теперь такая:
 
 ```text
-Lore API      -> персонажи, лор, scene context, references metadata
+Lore API      -> персонажи, лор, face locks, кеш и references metadata
 Локальный repo -> сцены кампании, actual scene references
 Пользователь  -> вручную прикрепляет найденные изображения в чат, если GPT не может загрузить их сам
 ChatGPT Plus  -> image generation использует прикрепленные изображения
+Lore API      <- после генерации принимает face lock через openaiFileIdRefs и сохраняет в repo
 ```
 
 Почему так: Custom GPT Actions хорошо получает JSON и ссылки, но ссылка на PNG сама по себе не всегда становится для генератора настоящим visual reference. Надежный способ в ChatGPT Plus - вручную прикрепить найденный портрет или сцену в чат.
@@ -506,6 +552,12 @@ lore_api/app.py
 
 ```text
 lore_api/indexer.py
+```
+
+Кеширование и сохранение face lock:
+
+```text
+lore_api/face_lock_store.py
 ```
 
 Зависимости:

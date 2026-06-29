@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel, Field, field_validator
 
+from .face_lock_store import FaceLockStore, FaceLockStoreError, safe_name
 from .indexer import DB_PATH, ROOT, make_file_id, rebuild_index, slugify, normalize_text
 
 
 RESPONSE_CACHE: dict[tuple[Any, ...], dict] = {}
 CACHE_GENERATION = 0
+FACE_LOCK_STORE = FaceLockStore(ROOT)
+WRITE_TOKEN_HEADER = APIKeyHeader(name="X-Lore-Write-Token", auto_error=False)
 
 
 app = FastAPI(
@@ -35,6 +41,7 @@ class HealthResponse(BaseModel):
     db_path: str
     cache_entries: int
     cache_generation: int
+    face_lock_writes_enabled: bool
 
 
 class ReindexResponse(BaseModel):
@@ -83,6 +90,29 @@ class ReferencesResponse(BaseModel):
     character: str
     path: str
     references: list[AssetReference]
+
+
+class FaceLockStoreRequest(BaseModel):
+    variants: list[str] = Field(default_factory=lambda: ["front"])
+    openaiFileIdRefs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "One generated ChatGPT image per variant. ChatGPT Actions replaces each "
+            "string with a runtime file-reference object containing name, id, mime_type, "
+            "and a temporary download_link."
+        ),
+    )
+    overwrite_repository_files: bool = False
+
+    @field_validator("openaiFileIdRefs", mode="before")
+    @classmethod
+    def serialize_runtime_file_refs(cls, value):
+        if not isinstance(value, list):
+            return value
+        return [
+            json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else item
+            for item in value
+        ]
 
 
 class SceneCharacter(BaseModel):
@@ -204,6 +234,19 @@ def clear_response_cache() -> None:
     CACHE_GENERATION += 1
 
 
+def require_write_token(
+    supplied_token: Annotated[Optional[str], Depends(WRITE_TOKEN_HEADER)] = None,
+) -> None:
+    expected_token = os.environ.get("LORE_WRITE_TOKEN", "")
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Face-lock writes are disabled until LORE_WRITE_TOKEN is configured",
+        )
+    if not supplied_token or not hmac.compare_digest(supplied_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid Lore API write token")
+
+
 def make_fts_query(query: str) -> str:
     tokens = re.findall(r"[\w-]+", normalize_text(query), flags=re.UNICODE)
     tokens = [token for token in tokens if len(token) > 1]
@@ -321,6 +364,37 @@ def get_references_for_document(connection: sqlite3.Connection, document_id: int
     return [row_to_dict(row) for row in rows]
 
 
+def face_lock_references(references: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [reference for reference in references if reference.get("type") == "face_lock"]
+
+
+def canonical_portrait_references(references: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    image_references = [
+        reference
+        for reference in references
+        if reference.get("type") in {"main_portrait", "portrait"}
+    ]
+    return sorted(
+        image_references,
+        key=lambda item: (
+            0 if item.get("type") == "main_portrait" else 1,
+            0 if item.get("priority") == "primary" else 1,
+            str(item.get("path", "")),
+        ),
+    )
+
+
+def character_document_and_references(
+    connection: sqlite3.Connection,
+    character: str,
+) -> tuple[sqlite3.Row, list[dict[str, Any]]]:
+    document = find_document(connection, character, "character")
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Character not found: {character}")
+    references = get_references_for_document(connection, int(document["id"]))
+    return document, references
+
+
 def get_scene_documents_in_branch(connection: sqlite3.Connection, scene_path: str) -> list[sqlite3.Row]:
     if not scene_path.startswith("01_Кампания/Ветки/"):
         return []
@@ -400,6 +474,7 @@ def health() -> dict:
         "db_path": str(DB_PATH),
         "cache_entries": len(RESPONSE_CACHE),
         "cache_generation": CACHE_GENERATION,
+        "face_lock_writes_enabled": bool(os.environ.get("LORE_WRITE_TOKEN")),
     }
 
 
@@ -499,6 +574,174 @@ def get_references(character: str, request: Request) -> dict:
         })
     finally:
         connection.close()
+
+
+FACE_LOCK_VARIANT_DIRECTIONS = {
+    "front": (
+        "front-facing at eye level, symmetrical head position, neutral serious expression, "
+        "eyes looking toward the camera"
+    ),
+    "three_quarter": (
+        "three-quarter view at roughly 35 degrees, eye-level camera, neutral serious expression, "
+        "both eyes still clearly visible"
+    ),
+    "profile": (
+        "clean side profile at roughly 90 degrees, eye-level camera, neutral serious expression"
+    ),
+}
+
+
+def build_face_lock_prompt(character: str, variant: str) -> str:
+    direction = FACE_LOCK_VARIANT_DIRECTIONS.get(
+        variant,
+        f"a clean identity-study view described as {variant}",
+    )
+    return f"""
+Edit Image 1 into one clean photorealistic identity reference for {character}.
+
+Identity is the highest priority. Preserve the exact same person: facial bone structure,
+face proportions, eye shape and spacing, eyebrows, nose, lips, cheekbones, jawline,
+age, skin texture, hairline, hair, facial hair, and distinctive asymmetries.
+Do not beautify, rejuvenate, average, redesign, or substitute the face.
+
+View: {direction}.
+Framing: one head-and-shoulders portrait, face large and unobstructed in frame.
+Lighting: soft neutral studio light that reveals facial geometry and skin texture.
+Background: plain dark neutral background.
+Output purpose: reusable identity reference for later image edits.
+
+Change only pose, camera angle, background, and neutral studio lighting as needed.
+No collage, no contact sheet, no duplicated face, no inset crops, no text, no borders,
+no costume redesign, no jewelry additions, no stylization, no cinematic color grading.
+""".strip()
+
+
+def action_file_dicts(values: list[str]) -> list[dict[str, Any]]:
+    file_refs: list[dict[str, Any]] = []
+    for value in values:
+        try:
+            item = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="openaiFileIdRefs must contain ChatGPT file-reference objects",
+            ) from error
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="openaiFileIdRefs must contain ChatGPT file-reference objects",
+            )
+        file_refs.append(item)
+    return file_refs
+
+
+@app.get("/face-locks/{character}", operation_id="get_face_locks")
+def get_face_locks(character: str, request: Request) -> dict:
+    base_url = request_base_url(request)
+    connection = connect()
+    try:
+        document, references = character_document_and_references(connection, character)
+        locks = with_file_urls(face_lock_references(references), base_url)
+        canonical = with_file_urls(canonical_portrait_references(references), base_url)
+        return {
+            "character": document["title"],
+            "path": document["path"],
+            "face_locks": locks,
+            "canonical_portraits": canonical,
+            "has_face_lock": bool(locks),
+            "recommended_variants": ["front", "three_quarter"],
+            "generation_prompts": {
+                variant: build_face_lock_prompt(document["title"], variant)
+                for variant in ("front", "three_quarter")
+            },
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/face-locks/{character}/store", operation_id="store_face_locks")
+def store_face_locks(
+    character: str,
+    payload: FaceLockStoreRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_write_token)],
+) -> dict:
+    base_url = request_base_url(request)
+    variants = [safe_name(variant.lower()) for variant in payload.variants if variant.strip()]
+    variants = list(dict.fromkeys(variants))
+    if not variants or len(variants) > 3:
+        raise HTTPException(status_code=400, detail="Provide between one and three face-lock variants")
+
+    connection = connect()
+    try:
+        document, _ = character_document_and_references(connection, character)
+    finally:
+        connection.close()
+
+    if not payload.openaiFileIdRefs:
+        raise HTTPException(
+            status_code=400,
+            detail="Attach generated face-lock images through openaiFileIdRefs",
+        )
+    if len(payload.openaiFileIdRefs) != len(variants):
+        raise HTTPException(
+            status_code=400,
+            detail="The number of variants must match the number of attached images",
+        )
+
+    try:
+        uploads = FACE_LOCK_STORE.cache_action_files(
+            action_file_dicts(payload.openaiFileIdRefs)
+        )
+    except FaceLockStoreError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if len(uploads) != len(variants):
+        raise HTTPException(
+            status_code=400,
+            detail="Each variant must use a different attached image",
+        )
+
+    character_folder = Path(document["path"]).stem
+    results = []
+    try:
+        saved_files = FACE_LOCK_STORE.save_many_to_repository(
+            character_folder=character_folder,
+            character_file_stem=character_folder,
+            variant_uploads=list(zip(variants, uploads)),
+            overwrite=payload.overwrite_repository_files,
+        )
+    except FaceLockStoreError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+    for variant, upload, (repository_path, repository_cache_hit) in zip(
+        variants,
+        uploads,
+        saved_files,
+    ):
+        relative_path = repository_path.relative_to(ROOT).as_posix()
+        results.append(
+            {
+                "variant": variant,
+                "sha256": upload.sha256,
+                "upload_cache_hit": upload.cache_hit,
+                "repository_cache_hit": repository_cache_hit,
+                "path": relative_path,
+                "url": f"{base_url}/files/{make_file_id(relative_path)}",
+                "download_url": f"{base_url}/files/{make_file_id(relative_path)}",
+            }
+        )
+
+    rebuild_index()
+    clear_response_cache()
+    return {
+        "character": document["title"],
+        "stored": len(results),
+        "results": results,
+        "note": (
+            "The images were generated by ChatGPT and only cached/indexed by Lore API; "
+            "no OpenAI API image request was made."
+        ),
+    }
 
 
 def get_scene_participants_for_document(connection: sqlite3.Connection, document_id: int) -> list[str]:

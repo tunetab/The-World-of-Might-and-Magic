@@ -221,13 +221,23 @@ def find_portrait_assets(doc: SourceDocument, root: Path = ROOT) -> list[dict[st
 
     portrait_dir = root / "11_Медиа" / "Портреты_персонажей" / doc.path.stem
     if portrait_dir.exists():
-        for image_path in sorted(portrait_dir.iterdir()):
+        for image_path in sorted(portrait_dir.rglob("*")):
+            if not image_path.is_file():
+                continue
             if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
                 continue
             rel_path = image_path.relative_to(root).as_posix()
             if all(asset["path"] != rel_path for asset in assets):
-                priority = "primary" if "основной_портрет" in image_path.name else "secondary"
-                assets.append({"type": "portrait", "path": rel_path, "priority": priority})
+                normalized_parts = {part.lower().replace("-", "_") for part in image_path.parts}
+                is_face_lock = (
+                    "face_lock" in normalized_parts
+                    or "face_lock" in image_path.stem.lower().replace("-", "_")
+                )
+                if is_face_lock:
+                    assets.append({"type": "face_lock", "path": rel_path, "priority": "primary"})
+                else:
+                    priority = "primary" if "основной_портрет" in image_path.name else "secondary"
+                    assets.append({"type": "portrait", "path": rel_path, "priority": priority})
 
         prompt_path = portrait_dir / "Промпт_портрета.md"
         if prompt_path.exists():
