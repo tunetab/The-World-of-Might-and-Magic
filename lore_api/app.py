@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import sqlite3
@@ -53,6 +54,9 @@ class ChunkResult(BaseModel):
     entity_type: str
     text: str
     score: Optional[float] = None
+    source_chunk_id: Optional[int] = None
+    chunk_index: Optional[int] = None
+    chunk_total: Optional[int] = None
 
 
 class SearchResponse(BaseModel):
@@ -120,6 +124,11 @@ class SceneContextResponse(BaseModel):
     location: Optional[str] = None
     scene_matches: list[SceneMatch] = Field(default_factory=list)
     related_context: list[ChunkResult]
+    cursor: Optional[str] = None
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+    page_size: int = 0
+    total_related_context: int = 0
 
 
 def request_base_url(request: Request) -> str:
@@ -180,6 +189,140 @@ def dump_chunk(chunk: Any) -> dict:
     if hasattr(chunk, "model_dump"):
         return chunk.model_dump()
     return dict(chunk)
+
+
+def split_text_for_scene_context(text: str, max_chars: int) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned or len(cleaned) <= max_chars:
+        return [cleaned] if cleaned else []
+
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", cleaned) if part.strip()]
+    if not paragraphs:
+        paragraphs = [cleaned]
+
+    parts: list[str] = []
+    current = ""
+
+    def flush_current() -> None:
+        nonlocal current
+        if current.strip():
+            parts.append(current.strip())
+        current = ""
+
+    def append_piece(piece: str) -> None:
+        nonlocal current
+        if not current:
+            current = piece
+            return
+        candidate = f"{current}\n\n{piece}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            return
+        flush_current()
+        current = piece
+
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            append_piece(paragraph)
+            continue
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?…])\s+", paragraph)
+            if sentence.strip()
+        ]
+        if not sentences:
+            sentences = [paragraph]
+
+        sentence_buffer = ""
+        for sentence in sentences:
+            if len(sentence) > max_chars:
+                flush_current()
+                if sentence_buffer:
+                    parts.append(sentence_buffer.strip())
+                    sentence_buffer = ""
+                for start in range(0, len(sentence), max_chars):
+                    parts.append(sentence[start : start + max_chars].strip())
+                continue
+
+            candidate = f"{sentence_buffer} {sentence}".strip() if sentence_buffer else sentence
+            if len(candidate) <= max_chars:
+                sentence_buffer = candidate
+                continue
+
+            if sentence_buffer:
+                append_piece(sentence_buffer.strip())
+            sentence_buffer = sentence
+
+        if sentence_buffer:
+            append_piece(sentence_buffer.strip())
+
+    flush_current()
+    return parts
+
+
+def split_chunk_for_scene_context(chunk: dict[str, Any], max_chars: int) -> list[dict[str, Any]]:
+    chunk_data = dump_chunk(chunk)
+    text_parts = split_text_for_scene_context(str(chunk_data.get("text", "")), max_chars)
+    if len(text_parts) <= 1:
+        if text_parts:
+            chunk_data["text"] = text_parts[0]
+        return [chunk_data]
+
+    source_chunk_id = int(chunk_data["id"])
+    chunk_total = len(text_parts)
+    split_chunks: list[dict[str, Any]] = []
+    for index, text_part in enumerate(text_parts, start=1):
+        split_chunk = dict(chunk_data)
+        split_chunk["text"] = text_part
+        split_chunk["source_chunk_id"] = source_chunk_id
+        split_chunk["chunk_index"] = index
+        split_chunk["chunk_total"] = chunk_total
+        split_chunks.append(split_chunk)
+    return split_chunks
+
+
+def split_chunks_for_scene_context(chunks: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
+    split_chunks: list[dict[str, Any]] = []
+    for chunk in chunks:
+        split_chunks.extend(split_chunk_for_scene_context(chunk, max_chars))
+    return split_chunks
+
+
+def encode_scene_context_cursor(offset: int) -> str:
+    payload = json.dumps({"offset": max(0, offset)}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_scene_context_cursor(cursor: Optional[str]) -> int:
+    if not cursor:
+        return 0
+    padded = cursor + "=" * (-len(cursor) % 4)
+    try:
+        payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        data = json.loads(payload)
+        offset = int(data.get("offset", 0))
+        return max(0, offset)
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+
+
+def paginate_scene_context_chunks(chunks: list[dict[str, Any]], page_size: int, cursor: Optional[str]) -> dict[str, Any]:
+    offset = decode_scene_context_cursor(cursor)
+    total = len(chunks)
+    if offset > total:
+        raise HTTPException(status_code=400, detail="Cursor is out of range")
+    page = chunks[offset : offset + page_size]
+    next_offset = offset + len(page)
+    has_more = next_offset < total
+    return {
+        "cursor": cursor,
+        "next_cursor": encode_scene_context_cursor(next_offset) if has_more else None,
+        "has_more": has_more,
+        "page_size": page_size,
+        "total_related_context": total,
+        "related_context": page,
+    }
 
 
 def split_character_names(value: Optional[str]) -> list[str]:
@@ -704,7 +847,13 @@ def build_scene_character_summaries(
     return payloads
 
 
-def build_scene_match_payloads(connection: sqlite3.Connection, base_url: str, candidates: list[dict], limit: int) -> list[dict]:
+def build_scene_match_payloads(
+    connection: sqlite3.Connection,
+    base_url: str,
+    candidates: list[dict],
+    limit: int,
+    chunk_size: int,
+) -> list[dict]:
     payloads: list[dict] = []
     for candidate in candidates[:limit]:
         participant_names = candidate["participants"]
@@ -716,7 +865,10 @@ def build_scene_match_payloads(connection: sqlite3.Connection, base_url: str, ca
                 "participant_overlap": candidate["participant_overlap"],
                 "score": candidate["score"],
                 "scene_characters": build_scene_character_summaries(connection, base_url, participant_names),
-                "context": get_section_chunks_for_document(connection, int(candidate["id"]), "Событие", limit=1),
+                "context": split_chunks_for_scene_context(
+                    get_section_chunks_for_document(connection, int(candidate["id"]), "Событие", limit=1),
+                    chunk_size,
+                ),
             }
         )
     return payloads
@@ -739,9 +891,12 @@ def get_scene_context(
     location: Annotated[str, Query(description="Optional location name.")] = "",
     scene_query: Annotated[str, Query(description="Freeform scene description to match against scene context.")] = "",
     limit: Annotated[int, Query(ge=1, le=20)] = 12,
+    page_size: Annotated[int, Query(ge=1, le=50, description="Number of related context chunks to return in this page.")] = 5,
+    cursor: Annotated[Optional[str], Query(description="Opaque cursor returned by a previous /scene-context response.")] = None,
+    chunk_size: Annotated[int, Query(ge=300, le=8000, description="Maximum characters per scene-context text chunk.")] = 1200,
 ) -> dict:
     base_url = request_base_url(request)
-    cache_key = ("scene-context", base_url, characters, location, scene_query, limit)
+    cache_key = ("scene-context", base_url, characters, location, scene_query, limit, page_size, cursor, chunk_size)
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
@@ -789,7 +944,13 @@ def get_scene_context(
             if candidate_matches:
                 with connect() as match_connection:
                     match_connection.row_factory = sqlite3.Row
-                    match_payloads = build_scene_match_payloads(match_connection, base_url, candidate_matches, limit=min(limit, 5))
+                    match_payloads = build_scene_match_payloads(
+                        match_connection,
+                        base_url,
+                        candidate_matches,
+                        limit=min(limit, 5),
+                        chunk_size=chunk_size,
+                    )
                     if match_payloads:
                         best_match_context = match_payloads[0]["context"]
         except Exception:
@@ -827,13 +988,19 @@ def get_scene_context(
     if not related_context and best_match_context:
         related_context = [dump_chunk(chunk) for chunk in best_match_context]
 
-    related_context = related_context[: min(limit, 5)]
+    related_context = split_chunks_for_scene_context(related_context, chunk_size)[:limit]
+    pagination = paginate_scene_context_chunks(related_context, page_size=page_size, cursor=cursor)
 
     return cache_set(cache_key, {
         "characters": character_payloads,
         "location": location,
         "scene_matches": match_payloads,
-        "related_context": related_context,
+        "related_context": pagination["related_context"],
+        "cursor": pagination["cursor"],
+        "next_cursor": pagination["next_cursor"],
+        "has_more": pagination["has_more"],
+        "page_size": pagination["page_size"],
+        "total_related_context": pagination["total_related_context"],
     })
 
 
@@ -844,6 +1011,9 @@ def get_scene_context_alias(
     location: Annotated[str, Query(description="Optional location name.")] = "",
     scene_query: Annotated[str, Query(description="Freeform scene description to match against scene context.")] = "",
     limit: Annotated[int, Query(ge=1, le=20)] = 12,
+    page_size: Annotated[int, Query(ge=1, le=50, description="Number of related context chunks to return in this page.")] = 5,
+    cursor: Annotated[Optional[str], Query(description="Opaque cursor returned by a previous /scene-context response.")] = None,
+    chunk_size: Annotated[int, Query(ge=300, le=8000, description="Maximum characters per scene-context text chunk.")] = 1200,
 ) -> dict:
     return get_scene_context(
         request=request,
@@ -851,6 +1021,9 @@ def get_scene_context_alias(
         location=location,
         scene_query=scene_query,
         limit=limit,
+        page_size=page_size,
+        cursor=cursor,
+        chunk_size=chunk_size,
     )
 
 
