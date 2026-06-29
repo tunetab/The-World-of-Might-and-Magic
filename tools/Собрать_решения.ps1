@@ -214,8 +214,16 @@ function Render-DecisionLog {
     param([object]$Registry)
 
     $decisions = @($Registry.decisions)
-    $pendingDecisions = @($decisions | Where-Object { $_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*' })
-    $acceptedDecisions = @($decisions | Where-Object { $_.state -eq 'accepted' -and $_.id -match '^DEC-\d{3}$' })
+    $pendingDecisions = @(
+        $decisions |
+            Where-Object { $_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*' } |
+            Sort-Object @{ Expression = { [int]($_.id -replace '^DEC-PENDING-', '') } }
+    )
+    $acceptedDecisions = @(
+        $decisions |
+            Where-Object { $_.state -eq 'accepted' -and $_.id -match '^DEC-\d{3}$' } |
+            Sort-Object @{ Expression = { [int]($_.id -replace '^DEC-', '') } }
+    )
     $lines = New-Object 'System.Collections.Generic.List[string]'
 
     Add-RawLine -Lines $lines -Line '# Журнал решений'
