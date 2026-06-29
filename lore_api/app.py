@@ -92,6 +92,42 @@ class ReferencesResponse(BaseModel):
     references: list[AssetReference]
 
 
+class FaceLockReferenceResponse(BaseModel):
+    type: str
+    path: str
+    url: Optional[str] = None
+    download_url: Optional[str] = None
+    priority: str
+    description: str = ""
+
+
+class FaceLockLookupResponse(BaseModel):
+    character: str
+    path: str
+    face_locks: list[FaceLockReferenceResponse]
+    canonical_portraits: list[FaceLockReferenceResponse]
+    has_face_lock: bool
+    recommended_variants: list[str]
+    generation_prompts: dict[str, str]
+
+
+class FaceLockStoredItemResponse(BaseModel):
+    variant: str
+    sha256: str
+    upload_cache_hit: bool
+    repository_cache_hit: bool
+    path: str
+    url: str
+    download_url: str
+
+
+class FaceLockStoreResponse(BaseModel):
+    character: str
+    stored: int
+    results: list[FaceLockStoredItemResponse]
+    note: str
+
+
 class FaceLockStoreRequest(BaseModel):
     variants: list[str] = Field(default_factory=lambda: ["front"])
     openaiFileIdRefs: list[str] = Field(
@@ -635,7 +671,7 @@ def action_file_dicts(values: list[str]) -> list[dict[str, Any]]:
     return file_refs
 
 
-@app.get("/face-locks/{character}", operation_id="get_face_locks")
+@app.get("/face-locks/{character}", operation_id="get_face_locks", response_model=FaceLockLookupResponse)
 def get_face_locks(character: str, request: Request) -> dict:
     base_url = request_base_url(request)
     connection = connect()
@@ -659,7 +695,7 @@ def get_face_locks(character: str, request: Request) -> dict:
         connection.close()
 
 
-@app.post("/face-locks/{character}/store", operation_id="store_face_locks")
+@app.post("/face-locks/{character}/store", operation_id="store_face_locks", response_model=FaceLockStoreResponse)
 def store_face_locks(
     character: str,
     payload: FaceLockStoreRequest,
