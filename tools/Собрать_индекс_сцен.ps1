@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipCheck
 )
 
@@ -6,7 +6,6 @@ $ErrorActionPreference = 'Stop'
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
-
 
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -16,35 +15,6 @@ $branchesRoot = Join-Path $root '01_Кампания\Ветки'
 $archiveRoot = Join-Path $root '06_Архив_канона'
 $targetPath = Join-Path $root '01_Кампания\00_Индекс_сцен.md'
 
-function Get-RelativeProjectPath {
-    param([string]$Path)
-
-    return (($Path.Substring($root.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
-
-function Get-Meta {
-    param(
-        [string]$Text,
-        [string]$Field
-    )
-
-    if ($Text -match "(?m)^$([regex]::Escape($Field)):\s*(.*?)\s*$") {
-        return $Matches[1].Trim()
-    }
-
-    return '-'
-}
-
-function Get-Title {
-    param([string]$Text)
-
-    if ($Text -match '(?m)^#\s+(.+?)\s*$') {
-        return $Matches[1].Trim()
-    }
-
-    return 'Без названия'
-}
-
 $sceneRows = New-Object 'System.Collections.Generic.List[object]'
 
 foreach ($file in Get-ChildItem -LiteralPath $branchesRoot -Recurse -File -Filter '*.md') {
@@ -53,18 +23,18 @@ foreach ($file in Get-ChildItem -LiteralPath $branchesRoot -Recurse -File -Filte
         continue
     }
 
-    $branch = Get-Meta -Text $text -Field 'branch'
+    $branch = Get-WmmaMeta -Default '-' -Text $text -Field 'branch'
     if ($branch -eq '-') {
         $branch = Split-Path -Leaf (Split-Path -Parent $file.FullName)
     }
 
     $sceneRows.Add([pscustomobject]@{
         Branch = $branch
-        Chapter = Get-Meta -Text $text -Field 'chapter'
-        Status = Get-Meta -Text $text -Field 'status'
-        FrontId = Get-Meta -Text $text -Field 'front_id'
-        Title = Get-Title -Text $text
-        File = Get-RelativeProjectPath $file.FullName
+        Chapter = Get-WmmaMeta -Default '-' -Text $text -Field 'chapter'
+        Status = Get-WmmaMeta -Default '-' -Text $text -Field 'status'
+        FrontId = Get-WmmaMeta -Default '-' -Text $text -Field 'front_id'
+        Title = Get-WmmaTitle -Text $text
+        File = Get-WmmaRelativePath -Root $root $file.FullName
     }) | Out-Null
 }
 
@@ -83,9 +53,9 @@ if (Test-Path -LiteralPath $archiveRoot) {
                 $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName
                 if ($text -match '(?m)^type:\s*archived_chapter\s*$') {
                     [pscustomobject]@{
-                        Title = Get-Title -Text $text
-                        Status = Get-Meta -Text $text -Field 'status'
-                        File = Get-RelativeProjectPath $_.FullName
+                        Title = Get-WmmaTitle -Text $text
+                        Status = Get-WmmaMeta -Default '-' -Text $text -Field 'status'
+                        File = Get-WmmaRelativePath -Root $root $_.FullName
                     }
                 }
             } |
@@ -139,7 +109,7 @@ foreach ($row in $archiveRows) {
     $lines.Add("| $($row.Title) | $($row.Status) | ``$($row.File)`` |") | Out-Null
 }
 
-Set-Content -LiteralPath $targetPath -Encoding UTF8 -Value $lines
+Write-WmmaGeneratedText -Path $targetPath -Text (($lines -join "`n")+"`n")
 
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Проверить_проект.ps1')
@@ -148,5 +118,5 @@ if (-not $SkipCheck) {
     }
 }
 
-"Built scene index: $(Get-RelativeProjectPath $targetPath)"
+"Built scene index: $(Get-WmmaRelativePath -Root $root $targetPath)"
 }

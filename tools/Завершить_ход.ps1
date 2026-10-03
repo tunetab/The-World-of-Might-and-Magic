@@ -1,107 +1,46 @@
-﻿param(
-    [switch]$SkipPortraits,
-
-    [switch]$SkipArchive,
-
-    [switch]$SkipSceneIndex,
-
-    [switch]$SkipSourceIndex,
-
-    [switch]$SkipCharacterIndex,
-
-    [switch]$SkipLocationIndex,
-
-    [switch]$SkipAssetIndex
+param(
+    [switch]$SkipPortraits,[switch]$SkipArchive,
+    [switch]$SkipSceneIndex,[switch]$SkipSourceIndex,
+    [switch]$SkipCharacterIndex,[switch]$SkipLocationIndex,[switch]$SkipAssetIndex
 )
-
-$ErrorActionPreference = 'Stop'
-
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-$OutputEncoding = [System.Text.UTF8Encoding]::new()
-
-
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new()
+$OutputEncoding=[Text.UTF8Encoding]::new()
 . (Join-Path $PSScriptRoot '_lib.ps1')
-$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$root=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
 Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
-function Invoke-Step {
-    param(
-        [string]$Name,
-        [scriptblock]$Action
-    )
-
-    "`n== $Name =="
-    & $Action
-    if (-not $?) {
-        exit 1
+    function Invoke-BuildStep([string]$Script,[hashtable]$Arguments=@{}){
+        "`n== $Script =="
+        $global:LASTEXITCODE=0
+        & (Join-Path $root "tools/$Script.ps1") @Arguments
+        if(-not $? -or $LASTEXITCODE -ne 0){throw "Turn step failed: $Script"}
     }
-}
 
-if (-not $SkipSceneIndex) {
-    Invoke-Step 'Сборка индекса сцен' {
-        & (Join-Path $root 'tools\Собрать_индекс_сцен.ps1') -SkipCheck
-    }
-}
+    # Sources -> graph/indices/registry views -> context/memory -> audit -> checks.
+    # Each builder runs once. Only disables legacy dependent rebuilds.
+    Invoke-BuildStep 'Собрать_связи' @{AssignMissingIds=$true;SkipCheck=$true}
+    foreach($step in @(
+        @{script='Собрать_индекс_сцен';skip=$SkipSceneIndex},
+        @{script='Собрать_индекс_источников';skip=$SkipSourceIndex},
+        @{script='Собрать_индекс_персонажей';skip=$SkipCharacterIndex},
+        @{script='Собрать_индекс_локаций';skip=$SkipLocationIndex},
+        @{script='Собрать_индекс_активов';skip=$SkipAssetIndex}
+    )){if(-not $step.skip){Invoke-BuildStep $step.script @{SkipCheck=$true}}}
+    Invoke-BuildStep 'Собрать_решения' @{Only=$true}
+    Invoke-BuildStep 'Собрать_вопросы' @{Only=$true}
+    Invoke-BuildStep 'Собрать_срезы_реестров' @{SkipCheck=$true}
+    Invoke-BuildStep 'Собрать_фронты' @{SkipCheck=$true}
 
-if (-not $SkipSourceIndex) {
-    Invoke-Step 'Сборка индекса источников' {
-        & (Join-Path $root 'tools\Собрать_индекс_источников.ps1') -SkipCheck
-    }
-}
+    # No source writes below this point; all readers share this explicit snapshot.
+    $data=New-WmmaReadModel $root
+    Invoke-BuildStep 'Собрать_панель_хода' @{Data=$data;SkipCheck=$true}
+    Invoke-BuildStep 'Собрать_контекст' @{Data=$data;SkipCheck=$true}
+    Invoke-BuildStep 'Собрать_память' @{Data=$data}
+    Invoke-BuildStep 'Собрать_аудит_данных' @{Data=$data}
 
-if (-not $SkipCharacterIndex) {
-    Invoke-Step 'Сборка индекса персонажей' {
-        & (Join-Path $root 'tools\Собрать_индекс_персонажей.ps1') -SkipCheck
-    }
-}
-
-if (-not $SkipLocationIndex) {
-    Invoke-Step 'Сборка индекса локаций' {
-        & (Join-Path $root 'tools\Собрать_индекс_локаций.ps1') -SkipCheck
-    }
-}
-
-if (-not $SkipAssetIndex) {
-    Invoke-Step 'Сборка индекса активов персонажей' {
-        & (Join-Path $root 'tools\Собрать_индекс_активов.ps1') -SkipCheck
-    }
-}
-
-Invoke-Step 'Сборка решений' {
-    & (Join-Path $root 'tools\Собрать_решения.ps1') -SkipCheck
-}
-
-Invoke-Step 'Сборка вопросов' {
-    & (Join-Path $root 'tools\Собрать_вопросы.ps1') -SkipCheck
-}
-
-Invoke-Step 'Сборка JSON-срезов реестров' {
-    & (Join-Path $root 'tools\Собрать_срезы_реестров.ps1') -SkipCheck
-}
-
-Invoke-Step 'Сборка фронтов' {
-    & (Join-Path $root 'tools\Собрать_фронты.ps1') -SkipCheck
-}
-
-Invoke-Step 'Сборка панели следующего хода' {
-    & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
-}
-
-if (-not $SkipArchive) {
-    Invoke-Step 'Проверка архива' {
-        & (Join-Path $root 'tools\Проверить_архив.ps1')
-    }
-}
-
-if (-not $SkipPortraits) {
-    Invoke-Step 'Проверка портретов' {
-        & (Join-Path $root 'tools\Проверить_портреты.ps1')
-    }
-}
-
-Invoke-Step 'Общая проверка проекта' {
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-}
-
-"`nTurn workspace is ready."
+    if(-not $SkipArchive){Invoke-BuildStep 'Проверить_архив'}
+    if(-not $SkipPortraits){Invoke-BuildStep 'Проверить_портреты'}
+    Invoke-BuildStep 'Проверить_проект'
+    "`nTurn workspace is ready."
 }

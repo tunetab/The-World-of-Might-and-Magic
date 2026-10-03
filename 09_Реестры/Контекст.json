@@ -1,0 +1,113 @@
+{
+  "schema_version": 2,
+  "type": "context_state",
+  "chapter_file": "01_Кампания/Главы/Глава_04_Врата_преисподней.md",
+  "scene_ids": [
+    "SCENE-0062",
+    "SCENE-0063",
+    "SCENE-0107"
+  ],
+  "fact_ids": [
+    "FACT-001",
+    "FACT-002",
+    "FACT-003",
+    "FACT-004",
+    "FACT-005",
+    "FACT-017"
+  ],
+  "focus_ids": [
+    "FRONT-THREE-MOONS",
+    "Q-WORLD-044",
+    "Q-WORLD-046",
+    "Q-C4-001",
+    "DEC-PENDING-136",
+    "DEC-PENDING-137",
+    "Q-WORLD-043",
+    "Q-WORLD-045"
+  ],
+  "branches": [
+    {
+      "name": "Александрос",
+      "character_id": "CHAR-0059",
+      "scene_ids": [
+        "SCENE-0063",
+        "SCENE-0062",
+        "SCENE-0061"
+      ],
+      "fact_ids": [
+        "FACT-006",
+        "FACT-007",
+        "FACT-013"
+      ],
+      "focus_ids": [
+        "DEC-PENDING-136",
+        "DEC-PENDING-132",
+        "FRONT-THREE-MOONS"
+      ],
+      "situation": "Александрос в Валантиде выбирает между походом к храму с Линдольфом и подготовкой Лайонела.",
+      "history": "01_Кампания/История/Ветка_Александрос_до_v2.md"
+    },
+    {
+      "name": "Михаэль",
+      "character_id": "CHAR-0136",
+      "scene_ids": [
+        "SCENE-0107",
+        "SCENE-0106",
+        "SCENE-0062"
+      ],
+      "fact_ids": [
+        "FACT-008",
+        "FACT-009",
+        "FACT-010",
+        "FACT-011",
+        "FACT-012",
+        "FACT-013",
+        "FACT-014"
+      ],
+      "focus_ids": [
+        "DEC-PENDING-137",
+        "Q-C4-001",
+        "FRONT-WAR-TREASURY",
+        "DEC-PENDING-132"
+      ],
+      "situation": "Михаэль в Валантиде определяет распределение капитала после доступа к Андрианаполису; смысл сна не раскрыт.",
+      "history": "01_Кампания/История/Ветка_Михаэль_до_v2.md"
+    },
+    {
+      "name": "Никитосиос",
+      "character_id": "CHAR-0114",
+      "scene_ids": [
+        "SCENE-0062",
+        "SCENE-0107",
+        "SCENE-0116"
+      ],
+      "fact_ids": [
+        "FACT-015",
+        "FACT-016",
+        "FACT-011"
+      ],
+      "focus_ids": [
+        "Q-WORLD-046",
+        "DEC-PENDING-131",
+        "FRONT-THREE-MOONS"
+      ],
+      "situation": "Никитосиос отправляется в Элирию договариваться с сумеречными эльфами; вступление в клан Аразаила не подтверждено.",
+      "history": "01_Кампания/История/Ветка_Никитосиос_до_v2.md"
+    },
+    {
+      "name": "Харрингтон",
+      "character_id": "CHAR-0137",
+      "scene_ids": [
+        "SCENE-0062",
+        "SCENE-0118"
+      ],
+      "fact_ids": [],
+      "focus_ids": [
+        "Q-C3-037",
+        "FRONT-SUN-SPEAR"
+      ],
+      "situation": "Положение Харрингтона сверяется с общими сценами Союза и его карточкой. Нового самостоятельного выбора не зафиксировано.",
+      "history": "01_Кампания/История/Ветка_Харрингтон_до_v2.md"
+    }
+  ]
+}

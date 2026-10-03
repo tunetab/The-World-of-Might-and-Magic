@@ -5,3 +5,16 @@
 *.jpeg binary
 *.png binary
 *.webp binary
+*.exe binary
+*.pdn binary
+*.zip binary
+*.cmd text eol=crlf
+*.ico binary
+*.ttf binary
+*.ttc binary
+*.gz binary
+*.regnum binary
+# Regnum: готовые сборки (Linux и macOS — без расширения) и эталонные данные тестов должны храниться байт в байт.
+tools/Regnum/bin/** binary
+tools/Regnum/src/tests/data/** binary
+tools/Regnum/src/tests/data/*.py text eol=lf

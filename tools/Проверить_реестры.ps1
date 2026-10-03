@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$Quiet,
     [switch]$PassThru
 )
@@ -231,7 +231,8 @@ function Assert-GeneratedFrom {
         [string]$Context
     )
 
-    $sources = Get-RegistryArray -Registry $Registry -Field 'generated_from' -Context $Context
+    $originField=if($Registry.schema_version -ge 2 -and $Registry.PSObject.Properties['imported_from']){'imported_from'}else{'generated_from'}
+    $sources = Get-RegistryArray -Registry $Registry -Field $originField -Context $Context
     foreach ($source in $sources) {
         if (Test-IsBlank $source) {
             Add-Problem Error "$Context has empty generated_from entry."

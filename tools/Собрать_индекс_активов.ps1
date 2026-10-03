@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipCheck
 )
 
@@ -15,75 +15,6 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 $assetRoot = Join-Path $root '05_Активы_персонажей'
 $targetPath = Join-Path $assetRoot '00_Индекс_активов.md'
 
-function Get-RelativeProjectPath {
-    param([string]$Path)
-
-    return (($Path.Substring($root.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
-
-function Read-Text {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ''
-    }
-
-    return Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
-}
-
-function Write-Utf8NoBom {
-    param(
-        [string]$Path,
-        [string]$Text
-    )
-
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
-}
-
-function Get-Meta {
-    param(
-        [string]$Text,
-        [string]$Field
-    )
-
-    if ($Text -match "(?m)^$([regex]::Escape($Field)):\s*(.*?)\s*$") {
-        return $Matches[1].Trim()
-    }
-
-    return $null
-}
-
-function Get-Title {
-    param([string]$Text)
-
-    if ($Text -match '(?m)^#\s+(.+?)\s*$') {
-        return $Matches[1].Trim()
-    }
-
-    return 'Без названия'
-}
-
-function Format-MarkdownCell {
-    param([AllowNull()][object]$Value)
-
-    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace($Value.ToString())) {
-        return '-'
-    }
-
-    return (($Value.ToString() -replace '\|', '/') -replace '\r?\n', ' ').Trim()
-}
-
-function Convert-MarkdownTableRow {
-    param([string]$Line)
-
-    if ($Line -notmatch '^\|.+\|$' -or $Line -match '^\|\s*-') {
-        return $null
-    }
-
-    return ,($Line.Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
-}
-
 function Get-ExistingAssetRows {
     param([string]$IndexText)
 
@@ -91,7 +22,7 @@ function Get-ExistingAssetRows {
     $order = 0
 
     foreach ($line in ($IndexText -split "\r?\n")) {
-        $cells = Convert-MarkdownTableRow -Line $line
+        $cells = Convert-WmmaTableRow -Line $line
         if ($null -eq $cells -or $cells.Count -lt 5 -or $cells[0] -eq 'Владелец') {
             continue
         }
@@ -116,14 +47,14 @@ foreach ($file in Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Filter '
     }
 
     $text = Read-Text -Path $file.FullName
-    if ((Get-Meta -Text $text -Field 'type') -ne 'character_asset') {
+    if ((Get-WmmaMeta -Text $text -Field 'type') -ne 'character_asset') {
         continue
     }
 
-    $relativePath = Get-RelativeProjectPath $file.FullName
-    $owner = Get-Meta -Text $text -Field 'owner'
-    $assetKind = Get-Meta -Text $text -Field 'asset_kind'
-    $status = Get-Meta -Text $text -Field 'status'
+    $relativePath = Get-WmmaRelativePath -Root $root $file.FullName
+    $owner = Get-WmmaMeta -Text $text -Field 'owner'
+    $assetKind = Get-WmmaMeta -Text $text -Field 'asset_kind'
+    $status = Get-WmmaMeta -Text $text -Field 'status'
 
     foreach ($required in @(
         [pscustomobject]@{ Name = 'owner'; Value = $owner },
@@ -147,7 +78,7 @@ foreach ($file in Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Filter '
 
     $assetRows.Add([pscustomobject]@{
         Owner = $owner
-        Asset = Get-Title -Text $text
+        Asset = Get-WmmaTitle -Text $text
         Kind = $assetKind
         Status = $status
         File = $relativePath
@@ -175,15 +106,15 @@ $lines.Add('| --- | --- | --- | --- | --- |') | Out-Null
 
 foreach ($row in $assetRows) {
     $lines.Add('| ' + (@(
-        Format-MarkdownCell $row.Owner
-        Format-MarkdownCell $row.Asset
-        Format-MarkdownCell $row.Kind
-        Format-MarkdownCell $row.Status
+        Format-WmmaTableCell -Empty '-' $row.Owner
+        Format-WmmaTableCell -Empty '-' $row.Asset
+        Format-WmmaTableCell -Empty '-' $row.Kind
+        Format-WmmaTableCell -Empty '-' $row.Status
         "``$($row.File)``"
     ) -join ' | ') + ' |') | Out-Null
 }
 
-Write-Utf8NoBom -Path $targetPath -Text (($lines -join "`n").TrimEnd() + "`n")
+Write-WmmaGeneratedText -Path $targetPath -Text (($lines -join "`n").TrimEnd() + "`n")
 
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Проверить_проект.ps1')
@@ -192,5 +123,5 @@ if (-not $SkipCheck) {
     }
 }
 
-"Built character asset index: $(Get-RelativeProjectPath $targetPath)"
+"Built character asset index: $(Get-WmmaRelativePath -Root $root $targetPath)"
 }

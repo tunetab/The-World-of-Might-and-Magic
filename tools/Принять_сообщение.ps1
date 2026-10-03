@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [string]$Title,
 
@@ -7,7 +7,9 @@
     [string]$TextPath = '',
 
     [ValidateSet('inbox', 'source')]
-    [string]$Mode = 'inbox',
+    [string]$Mode = 'source',
+
+    [string]$RequestId = '',
 
     [switch]$SkipCheck
 )
@@ -17,33 +19,12 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
-function Convert-ToProjectFileName {
-    param([string]$Value)
-
-    $safe = $Value.Trim().ToLowerInvariant()
-    $safe = [regex]::Replace($safe, '\s+', '_')
-    $safe = $safe -replace '[\\/:*?"<>|]', ''
-    $safe = $safe.Trim('_', '.', ' ')
-
-    if ([string]::IsNullOrWhiteSpace($safe)) {
-        throw 'Cannot build a safe file name from an empty message title.'
-    }
-
-    return $safe
-}
-
-function Get-RelativeProjectPath {
-    param([string]$Path)
-
-    return (($Path.Substring($root.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
 $today = Get-Date -Format 'yyyy-MM-dd'
-$codeFence = '```'
+Assert-WmmaSingleLine $Title 'Title'
 
 if (-not [string]::IsNullOrWhiteSpace($TextPath)) {
     $resolvedTextPath = (Resolve-Path -LiteralPath $TextPath).Path
@@ -53,16 +34,36 @@ if (-not [string]::IsNullOrWhiteSpace($TextPath)) {
 if ([string]::IsNullOrWhiteSpace($Text)) {
     throw 'Provide message text through -Text or -TextPath.'
 }
+$codeFence=Get-WmmaTextFence $Text
 
 $sourceReference = 'вручную через `tools/Принять_сообщение.ps1`'
+$messageHash=Get-WmmaHash ($Text.Replace("`r`n","`n").Trim())
+if(-not $RequestId){$RequestId='MSG-'+$messageHash.Substring(0,24)}
+if($RequestId -notmatch '^[A-Za-z0-9-]+$'){throw 'Invalid request ID.'}
+$receipt=Get-WmmaReceipt $root $RequestId
+if($receipt){
+    if($receipt.content_sha256 -cne $messageHash){throw 'Request ID already belongs to different content.'}
+    Assert-WmmaReceiptPayload $root $receipt
+    "Accepted message into inbox: $($receipt.title) (already recorded: $RequestId)"
+    return
+}
+$receipt=[pscustomobject]@{request_id=$RequestId;content_sha256=$messageHash;title=$Title;source_path=$null;scene_path=$null;state='accepted'}
 
 if ($Mode -eq 'source') {
     $sourceRoot = Join-Path $root '08_Источники'
-    $sourceFileName = "$today`_$(Convert-ToProjectFileName -Value $Title).md"
+    $sourceFileName = "$today`_$(Convert-WmmaFileName -Lowercase -Value $Title).md"
     $sourcePath = Join-Path $sourceRoot $sourceFileName
+    if((Test-Path -LiteralPath $sourcePath) -and (Get-WmmaMeta (Read-WmmaText $sourcePath) 'request_id') -ne $RequestId){
+        $sourceFileName="$today`_$(Convert-WmmaFileName -Lowercase -Value $Title)_$RequestId.md"
+        $sourcePath=Join-Path $sourceRoot $sourceFileName
+    }
 
+    $reuseSource=$false
     if (Test-Path -LiteralPath $sourcePath) {
-        throw "Source file already exists: $(Get-RelativeProjectPath $sourcePath)"
+        $existingSource=Read-WmmaText $sourcePath
+        if((Get-WmmaMeta $existingSource 'request_id') -ne $RequestId -or (Get-WmmaMeta $existingSource 'content_sha256') -cne $messageHash){throw "Source file already exists for another message: $(Get-WmmaRelativePath -Root $root $sourcePath)"}
+        if(-not (Test-WmmaSourcePayload $existingSource $messageHash)){throw 'Existing source payload differs from the original message.'}
+        $reuseSource=$true
     }
 
     $sourceContent = @"
@@ -73,6 +74,9 @@ type: source_note
 status: new
 canon_level: draft
 received_real_date: $today
+id: SRC-$([guid]::NewGuid().ToString('N'))
+request_id: $RequestId
+content_sha256: $messageHash
 ---
 
 ${codeFence}text
@@ -80,16 +84,22 @@ $Text
 ${codeFence}
 "@
 
-    Set-Content -LiteralPath $sourcePath -Encoding UTF8 -Value $sourceContent
-    $sourceReference = "``$(Get-RelativeProjectPath $sourcePath)``"
+    if(-not $reuseSource){Write-WmmaText $sourcePath $sourceContent}
+    $sourceReference = "``$(Get-WmmaRelativePath -Root $root $sourcePath)``"
+    $receipt.source_path=Get-WmmaRelativePath -Root $root $sourcePath
 }
 
 $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие_сообщения.md'
 $inbox = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxPath
+if(@(Get-WmmaInboxEntries $inbox|Where-Object {(Get-WmmaEntryField $_.Value 'Request-ID') -ceq $RequestId}).Count -gt 0){
+    Save-WmmaReceipt $root $receipt
+    "Accepted message into inbox: $Title (recovered: $RequestId)";return
+}
 $entry = @"
 ### $today. $Title
 
 Статус: новое.
+Request-ID: $RequestId
 Источник: $sourceReference
 
 ${codeFence}text
@@ -102,33 +112,19 @@ if ($inbox -notmatch '(?m)^## Новые сообщения\s*$') {
     throw 'Inbox section not found: ## Новые сообщения'
 }
 
-$inbox = $inbox -replace '(?m)^Пока нет новых необработанных сообщений\.\s*', ''
-$inbox = [regex]::Replace(
-    $inbox,
-    '(?ms)(^## Новые сообщения\s*\r?\n)(.*?)(\r?\n## Обработанные входящие)',
-    {
-        param($match)
+$newSection=@(Get-WmmaMarkdownSections $inbox 2|Where-Object heading -eq 'Новые сообщения')|Select-Object -First 1
+if(-not $newSection){throw 'Inbox new-message section is missing.'}
+$existing=$newSection.text.Trim()
+if($existing -eq 'Пока нет новых необработанных сообщений.'){$existing=''}
+$replacement="`n$entry`n$existing`n`n"
+$inbox=$inbox.Substring(0,$newSection.body_start)+$replacement+$inbox.Substring($newSection.end)
 
-        $existing = $match.Groups[2].Value.Trim()
-        $body = if ([string]::IsNullOrWhiteSpace($existing)) {
-            "`r`n$entry"
-        } else {
-            "`r`n$entry`r`n$existing`r`n"
-        }
-
-        return $match.Groups[1].Value + $body.TrimEnd() + $match.Groups[3].Value
-    },
-    1
-)
-
-Set-Content -LiteralPath $inboxPath -Encoding UTF8 -Value $inbox
+Write-WmmaText $inboxPath $inbox
+Save-WmmaReceipt $root $receipt
 
 if (-not $SkipCheck) {
-    $global:LASTEXITCODE = 0
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if (-not $? -or $LASTEXITCODE -ne 0) {
-        exit 1
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Accepted message into inbox: $Title"

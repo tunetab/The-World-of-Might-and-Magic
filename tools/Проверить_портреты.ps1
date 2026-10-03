@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -56,24 +56,7 @@ function Resolve-ProjectPath {
     return $null
 }
 
-function Get-ImageSize {
-    param([string]$Path)
-
-    try {
-        Add-Type -AssemblyName System.Drawing
-        $image = [System.Drawing.Image]::FromFile($Path)
-        try {
-            return [pscustomobject]@{
-                Width = $image.Width
-                Height = $image.Height
-            }
-        } finally {
-            $image.Dispose()
-        }
-    } catch {
-        return $null
-    }
-}
+function Get-ImageSize { param([string]$Path) return Get-WmmaImageSize $Path }
 
 function Test-AcceptedPortraitRatio {
     param(

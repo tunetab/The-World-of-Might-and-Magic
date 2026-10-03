@@ -1,0 +1,116 @@
+{
+  "id": "wmm-expanded-v1",
+  "version": 1,
+  "source": "Expanded Map.png",
+  "sourceSha256": "f479976d046b9161b8b503871a9abc74f6906bcb613b66be77995ae218f68257",
+  "width": 8000,
+  "height": 4500,
+  "tile": 512,
+  "tiles": "L{z}/{layer}_{x}_{y}.png",
+  "levels": [
+    {
+      "z": 0,
+      "w": 8000,
+      "h": 4500,
+      "cols": 16,
+      "rows": 9,
+      "scale": 1
+    },
+    {
+      "z": 1,
+      "w": 4000,
+      "h": 2250,
+      "cols": 8,
+      "rows": 5,
+      "scale": 2
+    },
+    {
+      "z": 2,
+      "w": 2000,
+      "h": 1125,
+      "cols": 4,
+      "rows": 3,
+      "scale": 4
+    },
+    {
+      "z": 3,
+      "w": 1000,
+      "h": 563,
+      "cols": 2,
+      "rows": 2,
+      "scale": 8
+    }
+  ],
+  "layers": ["ocean", "inland", "symbols"],
+  "empty": {
+    "ocean": [
+      [0, 7, 1],
+      [0, 8, 1],
+      [0, 7, 4],
+      [0, 12, 6],
+      [0, 8, 7],
+      [0, 9, 7]
+    ],
+    "inland": [
+      [0, 3, 0],
+      [0, 11, 0],
+      [0, 12, 0],
+      [0, 15, 0],
+      [0, 15, 1],
+      [0, 15, 2],
+      [0, 2, 4],
+      [0, 5, 7],
+      [0, 15, 7],
+      [0, 0, 8],
+      [0, 4, 8],
+      [0, 5, 8],
+      [0, 15, 8]
+    ],
+    "symbols": [
+      [0, 15, 0],
+      [0, 15, 1],
+      [0, 5, 7],
+      [0, 15, 7],
+      [0, 0, 8],
+      [0, 4, 8],
+      [0, 15, 8]
+    ]
+  },
+  "colors": {
+    "ocean": "#0026ff",
+    "inland": "#0026ff",
+    "land": "#ffffff"
+  },
+  "coast": {
+    "file": "coast.json",
+    "rings": 338,
+    "points": 11317,
+    "tolerance": 0.75,
+    "minIsletArea": 12
+  },
+  "mask": {
+    "file": "mask.png",
+    "w": 2000,
+    "h": 1125,
+    "scale": 4,
+    "ocean": 255
+  },
+  "preview": {
+    "file": "preview.png",
+    "w": 2000,
+    "h": 1125
+  },
+  "thumb": {
+    "file": "thumb.png",
+    "w": 480,
+    "h": 270
+  },
+  "build": {
+    "erodeRadius": 6,
+    "isletFillArea": 160,
+    "meanError": 0.0044,
+    "maxError": 2,
+    "mountains": 4196,
+    "pockets": 1
+  }
+}

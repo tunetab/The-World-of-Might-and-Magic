@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipCheck
 )
 
@@ -31,15 +31,7 @@ function Read-JsonFile {
     return (Get-Content -Raw -Encoding UTF8 -LiteralPath $Path) | ConvertFrom-Json
 }
 
-function Write-Utf8NoBom {
-    param(
-        [string]$Path,
-        [string]$Text
-    )
 
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
-}
 
 function Save-JsonFile {
     param(
@@ -48,7 +40,7 @@ function Save-JsonFile {
     )
 
     $json = $Value | ConvertTo-Json -Depth 12
-    Write-Utf8NoBom -Path $Path -Text ($json.TrimEnd() + "`n")
+    Write-WmmaGeneratedText -Path $Path -Text ($json.TrimEnd() + "`n") -Format json
 }
 
 function New-StatusCounts {

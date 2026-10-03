@@ -1,0 +1,76 @@
+name: Regnum Editor
+
+on:
+  push:
+    paths: ['tools/Regnum/**', '12_Карты/**', '.github/workflows/regnum.yml']
+  pull_request:
+    paths: ['tools/Regnum/**', '12_Карты/**', '.github/workflows/regnum.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.3'
+      REGNUM_TEST_OUT: ${{ github.workspace }}/.wmma/regnum-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node.js 24
+
+      - name: Fonts with Cyrillic (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! ls /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf >/dev/null 2>&1; then
+            sudo apt-get update -q && sudo apt-get install -y -q fonts-dejavu-core
+          fi
+
+      - name: Build and run tests
+        shell: bash
+        run: ./tools/Regnum/build.sh --test
+
+      - name: Build editor and CLI
+        shell: bash
+        run: ./tools/Regnum/build.sh regnum regnum-cli
+
+      - name: Validate bundled worlds
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) cli=tools/Regnum/bin/windows/regnum-cli.exe ;;
+            macOS) cli=tools/Regnum/bin/macos/regnum-cli ;;
+            *) cli=tools/Regnum/bin/linux/regnum-cli ;;
+          esac
+          for world in 12_Карты/*/world.json; do
+            [ -f "$world" ] || continue
+            "$cli" validate "$(dirname "$world")"
+          done
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node.js 24
+        with:
+          name: regnum-${{ runner.os }}
+          path: |
+            tools/Regnum/bin/windows/regnum.exe
+            tools/Regnum/bin/windows/regnum-cli.exe
+            tools/Regnum/bin/linux/regnum
+            tools/Regnum/bin/linux/regnum-cli
+            tools/Regnum/bin/macos/regnum
+            tools/Regnum/bin/macos/regnum-cli
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test images
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node.js 24
+        with:
+          name: regnum-tests-${{ runner.os }}
+          path: .wmma/regnum-tests/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

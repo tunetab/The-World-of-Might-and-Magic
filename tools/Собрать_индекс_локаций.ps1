@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipCheck
 )
 
@@ -15,75 +15,6 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 $locationRoot = Join-Path $root '04_Локации'
 $targetPath = Join-Path $locationRoot '00_Индекс_локаций.md'
 
-function Get-RelativeProjectPath {
-    param([string]$Path)
-
-    return (($Path.Substring($root.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
-
-function Read-Text {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ''
-    }
-
-    return Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
-}
-
-function Write-Utf8NoBom {
-    param(
-        [string]$Path,
-        [string]$Text
-    )
-
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
-}
-
-function Get-Meta {
-    param(
-        [string]$Text,
-        [string]$Field
-    )
-
-    if ($Text -match "(?m)^$([regex]::Escape($Field)):\s*(.*?)\s*$") {
-        return $Matches[1].Trim()
-    }
-
-    return $null
-}
-
-function Get-Title {
-    param([string]$Text)
-
-    if ($Text -match '(?m)^#\s+(.+?)\s*$') {
-        return $Matches[1].Trim()
-    }
-
-    return 'Без названия'
-}
-
-function Format-MarkdownCell {
-    param([AllowNull()][object]$Value)
-
-    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace($Value.ToString())) {
-        return '-'
-    }
-
-    return (($Value.ToString() -replace '\|', '/') -replace '\r?\n', ' ').Trim()
-}
-
-function Convert-MarkdownTableRow {
-    param([string]$Line)
-
-    if ($Line -notmatch '^\|.+\|$' -or $Line -match '^\|\s*-') {
-        return $null
-    }
-
-    return ,($Line.Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
-}
-
 function Get-ExistingLocationRows {
     param([string]$IndexText)
 
@@ -91,7 +22,7 @@ function Get-ExistingLocationRows {
     $order = 0
 
     foreach ($line in ($IndexText -split "\r?\n")) {
-        $cells = Convert-MarkdownTableRow -Line $line
+        $cells = Convert-WmmaTableRow -Line $line
         if ($null -eq $cells -or $cells.Count -lt 4 -or $cells[0] -eq 'Локация') {
             continue
         }
@@ -116,19 +47,19 @@ foreach ($file in Get-ChildItem -LiteralPath $locationRoot -File -Filter '*.md')
     }
 
     $text = Read-Text -Path $file.FullName
-    if ((Get-Meta -Text $text -Field 'type') -ne 'location') {
+    if ((Get-WmmaMeta -Text $text -Field 'type') -ne 'location') {
         continue
     }
 
-    $relativePath = Get-RelativeProjectPath $file.FullName
+    $relativePath = Get-WmmaRelativePath -Root $root $file.FullName
     $existing = $null
     if ($existingRows.ContainsKey($relativePath)) {
         $existing = $existingRows[$relativePath]
     }
 
-    $status = Get-Meta -Text $text -Field 'status'
+    $status = Get-WmmaMeta -Text $text -Field 'status'
 
-    $frontId = Get-Meta -Text $text -Field 'front_id'
+    $frontId = Get-WmmaMeta -Text $text -Field 'front_id'
     if ([string]::IsNullOrWhiteSpace($frontId)) {
         throw "Location card is missing front_id: $relativePath"
     }
@@ -139,7 +70,7 @@ foreach ($file in Get-ChildItem -LiteralPath $locationRoot -File -Filter '*.md')
     }
 
     $locationRows.Add([pscustomobject]@{
-        Name = Get-Title -Text $text
+        Name = Get-WmmaTitle -Text $text
         Status = $status
         FrontId = $frontId
         File = $relativePath
@@ -177,14 +108,14 @@ $lines.Add('| --- | --- | --- | --- |') | Out-Null
 
 foreach ($row in $locationRows) {
     $lines.Add('| ' + (@(
-        Format-MarkdownCell $row.Name
-        Format-MarkdownCell $row.Status
-        Format-MarkdownCell $row.FrontId
+        Format-WmmaTableCell -Empty '-' $row.Name
+        Format-WmmaTableCell -Empty '-' $row.Status
+        Format-WmmaTableCell -Empty '-' $row.FrontId
         "``$($row.File)``"
     ) -join ' | ') + ' |') | Out-Null
 }
 
-Write-Utf8NoBom -Path $targetPath -Text (($lines -join "`n").TrimEnd() + "`n")
+Write-WmmaGeneratedText -Path $targetPath -Text (($lines -join "`n").TrimEnd() + "`n")
 
 if (-not $SkipCheck) {
     & (Join-Path $root 'tools\Проверить_проект.ps1')
@@ -193,5 +124,5 @@ if (-not $SkipCheck) {
     }
 }
 
-"Built location index: $(Get-RelativeProjectPath $targetPath)"
+"Built location index: $(Get-WmmaRelativePath -Root $root $targetPath)"
 }

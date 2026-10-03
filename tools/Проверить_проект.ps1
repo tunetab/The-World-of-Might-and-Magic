@@ -1,8 +1,7 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
-
 
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -89,24 +88,7 @@ function Resolve-ProjectPath {
     return $null
 }
 
-function Get-ImageSize {
-    param([string]$Path)
-
-    try {
-        Add-Type -AssemblyName System.Drawing
-        $image = [System.Drawing.Image]::FromFile($Path)
-        try {
-            return [pscustomobject]@{
-                Width = $image.Width
-                Height = $image.Height
-            }
-        } finally {
-            $image.Dispose()
-        }
-    } catch {
-        return $null
-    }
-}
+function Get-ImageSize { param([string]$Path) return Get-WmmaImageSize $Path }
 
 function Test-AcceptedPortraitRatio {
     param(
@@ -158,70 +140,6 @@ function Test-PlannedReference {
     return $false
 }
 
-function Get-MetaType {
-    param([string]$Text)
-
-    if ($Text -match '(?s)^# .+?\r?\n\r?\n---\r?\n(.+?)\r?\n---') {
-        $meta = $Matches[1]
-        if ($meta -match '(?m)^type:\s*(.+?)\s*$') {
-            return $Matches[1].Trim()
-        }
-    }
-
-    return $null
-}
-
-function Get-MetaField {
-    param(
-        [string]$Text,
-        [string]$Field
-    )
-
-    if ($Text -match '(?s)^# .+?\r?\n\r?\n---\r?\n(.+?)\r?\n---') {
-        $meta = $Matches[1]
-        $escapedField = [regex]::Escape($Field)
-        if ($meta -match "(?m)^$escapedField\s*:\s*(.+?)\s*$") {
-            return $Matches[1].Trim()
-        }
-    }
-
-    return $null
-}
-
-function Get-MarkdownTitle {
-    param([string]$Text)
-
-    if ($Text -match '(?m)^#\s+(.+?)\s*$') {
-        return $Matches[1].Trim()
-    }
-
-    return 'Без названия'
-}
-
-function Get-SectionText {
-    param(
-        [string]$Text,
-        [string]$Heading
-    )
-
-    $escapedHeading = [regex]::Escape($Heading)
-    if ($Text -match "(?ms)^##\s+$escapedHeading\s*\r?\n(.+?)(?:\r?\n##\s+|\z)") {
-        return $Matches[1]
-    }
-
-    return ''
-}
-
-function Convert-MarkdownTableRow {
-    param([string]$Line)
-
-    if ($Line -notmatch '^\|.+\|$' -or $Line -match '^\|\s*-') {
-        return $null
-    }
-
-    return ,($Line.Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
-}
-
 function Compare-IdSets {
     param(
         [string]$LeftName,
@@ -246,18 +164,20 @@ function Compare-IdSets {
     }
 }
 
-$mdFiles = Get-ChildItem -LiteralPath $root -Recurse -Force -File -Filter '*.md' |
-    Where-Object {
-        $_.FullName -notmatch '\\.git\\' -and
-        $_.FullName -notmatch '\\[^\\]*_MD_[^\\]*\\'
+# Prune runtime copies before descending; enumerate the project once.
+$projectFiles=[Collections.Generic.List[IO.FileInfo]]::new()
+$folders=[Collections.Generic.Stack[string]]::new()
+$folders.Push($root)
+while($folders.Count){
+    foreach($item in Get-ChildItem -LiteralPath $folders.Pop() -Force){
+        if($item.PSIsContainer){
+            if($item.Name -in @('.git','.wmma','.build') -or $item.Name -match '_MD_' -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){continue}
+            $folders.Push($item.FullName)
+        }else{$projectFiles.Add($item)}
     }
-
-$imageFiles = Get-ChildItem -LiteralPath $root -Recurse -Force -File |
-    Where-Object {
-        $_.FullName -notmatch '\\.git\\' -and
-        $_.FullName -notmatch '\\[^\\]*_MD_[^\\]*\\' -and
-        $_.Extension -match '^\.(jpg|jpeg|png|webp)$'
-    }
+}
+$mdFiles=@($projectFiles|Where-Object Extension -eq '.md')
+$imageFiles=@($projectFiles|Where-Object {$_.Extension -match '^\.(jpg|jpeg|png|webp)$'})
 
 $legacyScanExtensions = @('.md', '.ps1', '.json', '.yml', '.yaml', '.txt', '.gitignore', '.gitattributes', '.editorconfig', 'pre-commit')
 $legacyScannerPaths = @(
@@ -265,13 +185,10 @@ $legacyScannerPaths = @(
     (Join-Path $root 'tools\Проверить_архив.ps1')
 )
 
-$textFilesForLegacyScan = Get-ChildItem -LiteralPath $root -Recurse -Force -File |
-    Where-Object {
-        $_.FullName -notmatch '\\.git\\' -and
-        $_.FullName -notmatch '\\[^\\]*_MD_[^\\]*\\' -and
-        $legacyScannerPaths -notcontains $_.FullName -and
-        ($legacyScanExtensions -contains $_.Extension -or $legacyScanExtensions -contains $_.Name)
-    }
+$textFilesForLegacyScan=@($projectFiles|Where-Object {
+    $legacyScannerPaths -notcontains $_.FullName -and
+    ($legacyScanExtensions -contains $_.Extension -or $legacyScanExtensions -contains $_.Name)
+})
 
 $filesByType = @{}
 
@@ -356,7 +273,7 @@ if (-not (Test-Path -LiteralPath $gitignorePath)) {
 
 foreach ($file in $mdFiles) {
     $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName
-    $type = Get-MetaType -Text $text
+    $type = Get-WmmaMeta -Field type -Text $text
     $relativeFile = Get-RelativePath $file.FullName
     $isTemplateFile = $relativeFile -like '09_*'
 
@@ -501,15 +418,15 @@ if (Test-Path -LiteralPath $chapterDir) {
     foreach ($file in $chapterFiles) {
         $chapterText = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName
         $relativeFile = Get-RelativePath $file.FullName
-        $type = Get-MetaField -Text $chapterText -Field 'type'
-        $chapter = Get-MetaField -Text $chapterText -Field 'chapter'
-        $status = Get-MetaField -Text $chapterText -Field 'status'
-        $canonLevel = Get-MetaField -Text $chapterText -Field 'canon_level'
-        $dateInStory = Get-MetaField -Text $chapterText -Field 'date_in_story'
-        $openedRealDate = Get-MetaField -Text $chapterText -Field 'opened_real_date'
-        $closedRealDate = Get-MetaField -Text $chapterText -Field 'closed_real_date'
-        $titleField = Get-MetaField -Text $chapterText -Field 'title'
-        $previousChapter = Get-MetaField -Text $chapterText -Field 'previous_chapter'
+        $type = Get-WmmaMeta -Text $chapterText -Field 'type'
+        $chapter = Get-WmmaMeta -Text $chapterText -Field 'chapter'
+        $status = Get-WmmaMeta -Text $chapterText -Field 'status'
+        $canonLevel = Get-WmmaMeta -Text $chapterText -Field 'canon_level'
+        $dateInStory = Get-WmmaMeta -Text $chapterText -Field 'date_in_story'
+        $openedRealDate = Get-WmmaMeta -Text $chapterText -Field 'opened_real_date'
+        $closedRealDate = Get-WmmaMeta -Text $chapterText -Field 'closed_real_date'
+        $titleField = Get-WmmaMeta -Text $chapterText -Field 'title'
+        $previousChapter = Get-WmmaMeta -Text $chapterText -Field 'previous_chapter'
 
         if ($type -ne 'chapter') {
             Add-Problem Error "Chapter file must have type: chapter: $relativeFile"
@@ -648,7 +565,7 @@ if (-not $filesByType.ContainsKey('character_assets_index')) {
     $assetRefs = New-Object 'System.Collections.Generic.List[string]'
 
     foreach ($line in ($assetIndex -split "\r?\n")) {
-        $cells = Convert-MarkdownTableRow -Line $line
+        $cells = Convert-WmmaTableRow -Line $line
         if ($null -eq $cells -or $cells.Count -lt 5 -or $cells[0] -eq 'Владелец') {
             continue
         }
@@ -702,11 +619,11 @@ if (-not $filesByType.ContainsKey('character_assets_index')) {
             Add-Problem Error "Character asset card is missing from asset index: $relativeAsset"
         }
 
-        $owner = Get-MetaField -Text $assetText -Field 'owner'
-        $assetKind = Get-MetaField -Text $assetText -Field 'asset_kind'
-        $status = Get-MetaField -Text $assetText -Field 'status'
-        $visual = Get-MetaField -Text $assetText -Field 'visual'
-        $visualStatus = Get-MetaField -Text $assetText -Field 'visual_status'
+        $owner = Get-WmmaMeta -Text $assetText -Field 'owner'
+        $assetKind = Get-WmmaMeta -Text $assetText -Field 'asset_kind'
+        $status = Get-WmmaMeta -Text $assetText -Field 'status'
+        $visual = Get-WmmaMeta -Text $assetText -Field 'visual'
+        $visualStatus = Get-WmmaMeta -Text $assetText -Field 'visual_status'
 
         foreach ($required in @(
             [pscustomobject]@{ Name = 'owner'; Value = $owner },
@@ -738,7 +655,7 @@ if (-not $filesByType.ContainsKey('character_assets_index')) {
 
         if ($assetIndexRowsByRef.ContainsKey($relativeAsset)) {
             $indexRow = $assetIndexRowsByRef[$relativeAsset]
-            $assetTitle = Get-MarkdownTitle -Text $assetText
+            $assetTitle = Get-WmmaTitle -Text $assetText
 
             if ($indexRow.Owner -ne $owner) {
                 Add-Problem Error "Character asset index owner mismatch: $relativeAsset uses '$($indexRow.Owner)' but card expects '$owner'"
@@ -790,7 +707,7 @@ if (-not $filesByType.ContainsKey('source_index')) {
 
     $validSourceStatuses = @('new', 'processed', 'archived')
     foreach ($line in ($sourceIndex -split "\r?\n")) {
-        $cells = Convert-MarkdownTableRow -Line $line
+        $cells = Convert-WmmaTableRow -Line $line
         if ($null -eq $cells -or $cells.Count -lt 6 -or $cells[0] -eq 'Дата') {
             continue
         }
@@ -982,7 +899,7 @@ if (-not $filesByType.ContainsKey('character_portrait_index')) {
 
         foreach ($promptFile in Get-ChildItem -LiteralPath $dir.FullName -File -Filter '*.md') {
             $promptText = Get-Content -Raw -Encoding UTF8 -LiteralPath $promptFile.FullName
-            if ((Get-MetaType -Text $promptText) -eq 'portrait_prompt') {
+            if ((Get-WmmaMeta -Field type -Text $promptText) -eq 'portrait_prompt') {
                 $hasPrompt = $true
                 break
             }
@@ -1120,74 +1037,14 @@ if ($filesByType.ContainsKey('open_questions')) {
     }
 }
 
-$decisionRegistryPath = Join-Path $root '09_Реестры\Решения.json'
-if (Test-Path -LiteralPath $decisionRegistryPath) {
-    $decisionRegistry = $null
-    try {
-        $decisionRegistry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $decisionRegistryPath) | ConvertFrom-Json
-    } catch {
-        Add-Problem Error "Decision registry is not valid JSON: 09_Реестры\Решения.json - $($_.Exception.Message)"
-    }
-
-    if ($null -ne $decisionRegistry) {
-        if ($decisionRegistry.type -ne 'decision_registry') {
-            Add-Problem Error "Decision registry has invalid type: $($decisionRegistry.type)"
-        }
-
-        $registryDecisions = @($decisionRegistry.decisions)
-        if ($registryDecisions.Count -eq 0) {
-            Add-Problem Error 'Decision registry contains no decisions.'
-        }
-
-        $registryDecisionIds = @(
-            $registryDecisions |
-                ForEach-Object { $_.id }
-        )
-
-        $duplicateRegistryDecisionIds = $registryDecisionIds |
-            Group-Object |
-            Where-Object { $_.Count -gt 1 } |
-            ForEach-Object { $_.Name }
-
-        foreach ($id in $duplicateRegistryDecisionIds) {
-            Add-Problem Error "Duplicate decision ID in registry: $id"
-        }
-
-        foreach ($decision in $registryDecisions) {
-            if ($decision.id -notmatch '^DEC(?:-PENDING)?-\d{3}$') {
-                Add-Problem Error "Invalid decision ID in registry: $($decision.id)"
-            }
-
-            if ($decision.state -notin @('pending', 'accepted')) {
-                Add-Problem Error "Invalid decision state in registry for $($decision.id): $($decision.state)"
-            }
-
-            if ($decision.id -like 'DEC-PENDING-*' -and $decision.state -ne 'pending') {
-                Add-Problem Error "Pending decision has non-pending state in registry: $($decision.id)"
-            }
-
-            if ($decision.id -match '^DEC-\d{3}$' -and $decision.state -ne 'accepted') {
-                Add-Problem Error "Accepted decision has non-accepted state in registry: $($decision.id)"
-            }
-
-            if ($decision.state -eq 'pending') {
-                foreach ($field in @('priority', 'question', 'owner', 'panel_status')) {
-                    if ([string]::IsNullOrWhiteSpace($decision.$field)) {
-                        Add-Problem Error "Pending decision $($decision.id) has empty registry field: $field"
-                    }
-                }
-            }
-        }
-
-        $registryPendingDecisionIds = @(
-            $registryDecisions |
-                Where-Object { $_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*' } |
-                ForEach-Object { $_.id }
-        )
-
-        Compare-IdSets 'decision registry decisions' $registryDecisionIds 'decision_log headings' $decisionIds
-        Compare-IdSets 'decision registry pending decisions' $registryPendingDecisionIds 'open_questions pending decisions' $activePendingDecisionIds
-    }
+# Registry structure is checked once by Проверить_реестры. Here compare views.
+try {
+    $decisions=(Read-WmmaRegistry $root 'Решения').decisions
+    $pending=@($decisions|Where-Object {$_.state -eq 'pending' -or $_.id -like 'DEC-PENDING-*'}|ForEach-Object {$_.id})
+    Compare-IdSets 'decision registry decisions' @($decisions.id) 'decision_log headings' $decisionIds
+    Compare-IdSets 'decision registry pending decisions' $pending 'open_questions pending decisions' $activePendingDecisionIds
+} catch {
+    Add-Problem Error "Cannot compare decision views: $($_.Exception.Message)"
 }
 
 if ($filesByType.ContainsKey('closed_questions')) {
@@ -1242,93 +1099,18 @@ if ($filesByType.ContainsKey('closed_questions')) {
     }
 }
 
-$questionRegistryPath = Join-Path $root '09_Реестры\Вопросы.json'
-if (Test-Path -LiteralPath $questionRegistryPath) {
-    $questionRegistry = $null
-    try {
-        $questionRegistry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $questionRegistryPath) | ConvertFrom-Json
-    } catch {
-        Add-Problem Error "Question registry is not valid JSON: 09_Реестры\Вопросы.json - $($_.Exception.Message)"
-    }
-
-    if ($null -ne $questionRegistry) {
-        if ($questionRegistry.type -ne 'question_registry') {
-            Add-Problem Error "Question registry has invalid type: $($questionRegistry.type)"
-        }
-
-        $registryQuestions = @($questionRegistry.questions)
-        if ($registryQuestions.Count -eq 0) {
-            Add-Problem Error 'Question registry contains no questions.'
-        }
-
-        $registryIds = @(
-            $registryQuestions |
-                ForEach-Object { $_.id }
-        )
-
-        $duplicateRegistryIds = $registryIds |
-            Group-Object |
-            Where-Object { $_.Count -gt 1 } |
-            ForEach-Object { $_.Name }
-
-        foreach ($id in $duplicateRegistryIds) {
-            Add-Problem Error "Duplicate question ID in registry: $id"
-        }
-
-        $validRegistryStatuses = @('active', 'waiting', 'later', 'resolved')
-        foreach ($question in $registryQuestions) {
-            if ($question.id -notmatch '^Q-(?:C\d+|WORLD)-\d{3}$') {
-                Add-Problem Error "Invalid question ID in registry: $($question.id)"
-            }
-
-            if ($validRegistryStatuses -notcontains $question.status) {
-                Add-Problem Error "Invalid question status in registry for $($question.id): $($question.status)"
-            }
-
-            if ($question.scope -notin @('chapter', 'world')) {
-                Add-Problem Error "Invalid question scope in registry for $($question.id): $($question.scope)"
-            }
-
-            if ($question.id -match '^Q-C\d+-' -and $question.scope -ne 'chapter') {
-                Add-Problem Error "Chapter question has non-chapter scope in registry: $($question.id)"
-            }
-
-            if ($question.id -like 'Q-WORLD-*' -and $question.scope -ne 'world') {
-                Add-Problem Error "World question has non-world scope in registry: $($question.id)"
-            }
-        }
-
-        $registryOpenQuestionIds = @(
-            $registryQuestions |
-                Where-Object { $_.status -ne 'resolved' } |
-                ForEach-Object { $_.id }
-        )
-        $registryClosedQuestionIds = @(
-            $registryQuestions |
-                Where-Object { $_.status -eq 'resolved' } |
-                ForEach-Object { $_.id }
-        )
-
-        Compare-IdSets 'question registry open questions' $registryOpenQuestionIds 'open_questions question rows' $openQuestionIds
-        Compare-IdSets 'question registry resolved questions' $registryClosedQuestionIds 'closed_questions question rows' $closedQuestionIds
-
-        $historyItems = @($questionRegistry.history)
-        $historyIds = @($historyItems | ForEach-Object { $_.id })
-        foreach ($historyId in ($historyIds | Sort-Object -Unique)) {
-            if ($registryClosedQuestionIds -notcontains $historyId) {
-                Add-Problem Error "Question registry history references a missing or unresolved question: $historyId"
-            }
-        }
-
-        foreach ($id in ($registryClosedQuestionIds | Sort-Object -Unique)) {
-            if ($historyIds -notcontains $id) {
-                Add-Problem Warning "Resolved question has no history entry in registry: $id"
-            }
-        }
-    }
+try {
+    $questions=(Read-WmmaRegistry $root 'Вопросы').questions
+    $open=@($questions|Where-Object status -ne resolved|ForEach-Object {$_.id})
+    $closed=@($questions|Where-Object status -eq resolved|ForEach-Object {$_.id})
+    Compare-IdSets 'question registry open questions' $open 'open_questions question rows' $openQuestionIds
+    Compare-IdSets 'question registry resolved questions' $closed 'closed_questions question rows' $closedQuestionIds
+} catch {
+    Add-Problem Error "Cannot compare question views: $($_.Exception.Message)"
 }
 
 $liveContextFilesByPath = @{}
+
 function Add-LiveContextFile {
     param([string]$Path)
 
@@ -1358,7 +1140,7 @@ foreach ($typeName in @(
 if ($filesByType.ContainsKey('chapter')) {
     foreach ($file in $filesByType['chapter']) {
         $chapterText = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName
-        if ((Get-MetaField -Text $chapterText -Field 'status') -eq 'active') {
+        if ((Get-WmmaMeta -Text $chapterText -Field 'status') -eq 'active') {
             Add-LiveContextFile -Path $file.FullName
         }
     }
@@ -1397,7 +1179,7 @@ if ($filesByType.ContainsKey('scene')) {
     foreach ($file in $filesByType['scene']) {
         $sceneText = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName
         $sceneRef = (Get-RelativePath $file.FullName) -replace '\\', '/'
-        $sceneStatusByRef[$sceneRef] = Get-MetaField -Text $sceneText -Field 'status'
+        $sceneStatusByRef[$sceneRef] = Get-WmmaMeta -Text $sceneText -Field 'status'
     }
 }
 
@@ -1417,7 +1199,7 @@ foreach ($file in $liveContextFiles) {
     }
 
     foreach ($line in ($text -split "\r?\n")) {
-        $cells = Convert-MarkdownTableRow -Line $line
+        $cells = Convert-WmmaTableRow -Line $line
         if ($null -eq $cells) {
             continue
         }
@@ -1510,7 +1292,7 @@ if ($filesByType.ContainsKey('front_tracker')) {
     $timerSection = Get-SectionText -Text $frontTracker -Heading 'Таймеры угроз'
     $timerRows = @(
         $timerSection -split "\r?\n" |
-            ForEach-Object { Convert-MarkdownTableRow -Line $_ } |
+            ForEach-Object { Convert-WmmaTableRow -Line $_ } |
             Where-Object { $null -ne $_ -and $_.Count -ge 2 -and $_[0] -match '^FRONT-[A-Z0-9-]+$' }
     )
     $timerKeys = @(
@@ -1617,56 +1399,15 @@ if ($filesByType.ContainsKey('front_tracker')) {
         }
     }
 
-    $frontRegistryPath = Join-Path $root '09_Реестры\Фронты.json'
-    if (Test-Path -LiteralPath $frontRegistryPath) {
-        $frontRegistry = $null
-        try {
-            $frontRegistry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $frontRegistryPath) | ConvertFrom-Json
-        } catch {
-            Add-Problem Error "Front registry is not valid JSON: 09_Реестры\Фронты.json - $($_.Exception.Message)"
-        }
-
-        if ($null -ne $frontRegistry) {
-            if ($frontRegistry.type -ne 'front_registry') {
-                Add-Problem Error "Front registry has invalid type: $($frontRegistry.type)"
-            }
-
-            $registryFrontIds = @($frontRegistry.fronts | ForEach-Object { $_.id })
-            $registryUrgentIds = @($frontRegistry.urgent_forks | ForEach-Object { $_.id })
-            $registryActiveIds = @($frontRegistry.active_fronts | ForEach-Object { $_.id })
-            $registryTimerKeys = @($frontRegistry.timers | ForEach-Object { "$($_.id)|$($_.timer)" })
-
-            if ($registryFrontIds.Count -eq 0) {
-                Add-Problem Error 'Front registry contains no FRONT-ID declarations.'
-            }
-
-            foreach ($id in ($registryFrontIds | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })) {
-                Add-Problem Error "Duplicate FRONT-ID in registry: $id"
-            }
-
-            foreach ($id in $registryFrontIds) {
-                if ($id -notmatch '^FRONT-[A-Z0-9-]+$') {
-                    Add-Problem Error "Invalid FRONT-ID in registry: $id"
-                }
-            }
-
-            foreach ($id in ($registryUrgentIds + $registryActiveIds + (@($frontRegistry.timers) | ForEach-Object { $_.id }) | Sort-Object -Unique)) {
-                if ($registryFrontIds -notcontains $id) {
-                    Add-Problem Error "Front registry uses undeclared FRONT-ID: $id"
-                }
-            }
-
-            foreach ($priority in @($frontRegistry.urgent_forks | ForEach-Object { $_.priority })) {
-                if ($priority -notin @('критический', 'высокий', 'средний', 'низкий')) {
-                    Add-Problem Error "Invalid front priority in registry: $priority"
-                }
-            }
-
-            Compare-IdSets 'front registry declarations' $registryFrontIds 'front_tracker declarations' $declaredFrontIds
-            Compare-IdSets 'front registry urgent forks' $registryUrgentIds 'front_tracker urgent forks' $urgentFrontIds
-            Compare-IdSets 'front registry active fronts' $registryActiveIds 'front_tracker active fronts' $activeFrontIds
-            Compare-IdSets 'front registry timers' $registryTimerKeys 'front_tracker timers' $timerKeys
-        }
+    try {
+        $registry=Read-WmmaRegistry $root 'Фронты'
+        Compare-IdSets 'front registry declarations' @($registry.fronts.id) 'front_tracker declarations' $declaredFrontIds
+        Compare-IdSets 'front registry urgent forks' @($registry.urgent_forks.id) 'front_tracker urgent forks' $urgentFrontIds
+        Compare-IdSets 'front registry active fronts' @($registry.active_fronts.id) 'front_tracker active fronts' $activeFrontIds
+        $keys=@($registry.timers|ForEach-Object {"$($_.id)|$($_.timer)"})
+        Compare-IdSets 'front registry timers' $keys 'front_tracker timers' $timerKeys
+    } catch {
+        Add-Problem Error "Cannot compare front views: $($_.Exception.Message)"
     }
 }
 
@@ -1702,6 +1443,25 @@ if ($filesByType.ContainsKey('scene')) {
 
         if ($declaredFrontIdSet.Count -gt 0 -and $declaredFrontIdSet -notcontains $frontId) {
             Add-Problem Error "Scene uses undeclared FRONT-ID: $relativeFile -> $frontId"
+        }
+    }
+}
+
+if(Test-Path -LiteralPath (Join-Path $root '09_Реестры/Контекст.json')) {
+    $contextResult=& (Join-Path $root 'tools/Проверить_контекст.ps1') -AsObject
+    foreach($problem in $contextResult.Errors){Add-Problem Error $problem}
+    foreach($problem in $contextResult.Warnings){Add-Problem Warning $problem}
+}
+
+# Миры редактора Regnum: целостность данных и геометрии (если собран regnum-cli).
+$regnumCli = Join-Path $root 'tools/Regnum/bin/windows/regnum-cli.exe'
+if ($IsWindows -ne $false -and (Test-Path -LiteralPath $regnumCli)) {
+    foreach ($worldFile in @(Get-ChildItem -LiteralPath (Join-Path $root '12_Карты') -Filter 'world.json' -Recurse -File -ErrorAction SilentlyContinue)) {
+        $worldDir = $worldFile.DirectoryName
+        $global:LASTEXITCODE = 0
+        $out = & $regnumCli validate $worldDir 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Add-Problem Error "Regnum world is invalid: $(Get-RelativePath $worldDir)`n$out"
         }
     }
 }

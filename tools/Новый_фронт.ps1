@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^FRONT-[A-Z0-9-]+$')]
     [string]$Id,
@@ -37,7 +37,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
@@ -55,7 +54,7 @@ function Normalize-LinkReference {
 }
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
-    throw "Front registry is missing: 09_Реестры/Фронты.json. Run .\tools\Собрать_фронты.ps1 -ImportFromMarkdown once."
+    throw "Front registry is missing: 09_Реестры/Фронты.json. Restore the authoritative JSON registry from a verified backup."
 }
 
 if ([string]::IsNullOrWhiteSpace($Description)) {
@@ -131,10 +130,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (-not $SkipCheck) {
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Created front: $Id"

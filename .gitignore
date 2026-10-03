@@ -19,3 +19,17 @@ lore_api/__pycache__/
 # Local Obsidian workspace state, if the vault is opened there.
 .obsidian/workspace*.json
 .obsidian/cache/
+
+# Local transaction journals and test workspaces (never campaign canon).
+.wmma/
+
+# Regnum: local build cache and test executables (the editor and CLI binaries are committed).
+tools/Regnum/.build/
+tools/Regnum/bin/*/regnum-test*
+tools/Regnum/bin/*/platform-demo*
+
+# Python caches.
+__pycache__/
+# Regnum: локальные сборки на Linux и macOS (в репозитории — готовые сборки linux-x64, linux-arm64, macos-arm64, macos-x64).
+tools/Regnum/bin/linux/
+tools/Regnum/bin/macos/

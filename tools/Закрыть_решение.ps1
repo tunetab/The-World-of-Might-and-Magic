@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^DEC-PENDING-\d{3}$')]
     [string]$PendingId,
@@ -20,7 +20,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
@@ -29,7 +28,7 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 $registryPath = Join-Path $root '09_Реестры\Решения.json'
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
-    throw "Decision registry is missing: 09_Реестры/Решения.json. Run .\tools\Собрать_решения.ps1 -ImportFromMarkdown once."
+    throw "Decision registry is missing: 09_Реестры/Решения.json. Restore the authoritative JSON registry from a verified backup."
 }
 
 $registry = (Get-Content -Raw -Encoding UTF8 -LiteralPath $registryPath) | ConvertFrom-Json
@@ -37,6 +36,8 @@ $decisions = @($registry.decisions)
 $pendingDecision = $decisions | Where-Object { $_.id -eq $PendingId } | Select-Object -First 1
 
 if ($null -eq $pendingDecision) {
+    $already=@($decisions | Where-Object {$_.resolved_from -eq $PendingId -and $_.id -eq $AcceptedId -and $_.state -eq 'accepted'})|Select-Object -First 1
+    if($already -and $already.choice -ceq $Choice -and $already.immediate_effect -ceq $Effect){"Closed decision: $PendingId -> $AcceptedId (already applied)";return}
     throw "Cannot find $PendingId in 09_Реестры/Решения.json."
 }
 
@@ -48,6 +49,10 @@ if ($decisions | Where-Object { $_.id -eq $AcceptedId } | Select-Object -First 1
     throw "Accepted decision ID already exists in 09_Реестры/Решения.json: $AcceptedId"
 }
 
+$pendingDecision | Add-Member -NotePropertyName uid -NotePropertyValue $(if ($pendingDecision.uid) {$pendingDecision.uid} else {'DUID-' + [guid]::NewGuid().ToString('N')}) -Force
+$pendingDecision | Add-Member -NotePropertyName resolved_from -NotePropertyValue $PendingId -Force
+$pendingDecision | Add-Member -NotePropertyName original_question -NotePropertyValue $pendingDecision.question -Force
+$pendingDecision | Add-Member -NotePropertyName transitions -NotePropertyValue @(@($pendingDecision.transitions | Where-Object {$_}) + [pscustomobject]@{from=$PendingId;to=$AcceptedId;at=$today}) -Force
 $pendingDecision.id = $AcceptedId
 $pendingDecision.state = 'accepted'
 $pendingDecision.real_date = $today
@@ -72,7 +77,12 @@ $encoding = [System.Text.UTF8Encoding]::new($false)
 $contextPath = Join-Path $root '01_Кампания\00_Текущий_контекст.md'
 if (Test-Path -LiteralPath $contextPath) {
     $contextLines = Get-Content -Encoding UTF8 -LiteralPath $contextPath
-    $contextLines = $contextLines | Where-Object { $_ -notmatch [regex]::Escape($PendingId) }
+    # Only the numbered decision entry is removed. Narrative paragraphs survive;
+    # their reference is updated to the accepted ID without deleting other facts.
+    $contextLines = @($contextLines | ForEach-Object {
+        if ($_ -match ('^\d+\.\s+`' + [regex]::Escape($PendingId) + '`')) { return }
+        $_.Replace($PendingId, $AcceptedId)
+    })
     $renumbered = New-Object 'System.Collections.Generic.List[string]'
     $insideImmediate = $false
     $counter = 1
@@ -106,15 +116,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (-not $SkipCheck) {
-    & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Closed decision: $PendingId -> $AcceptedId"

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [string]$Name,
 
@@ -19,25 +19,11 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
-function Convert-ToProjectFileName {
-    param([string]$Value)
-
-    $safe = [regex]::Replace($Value.Trim(), '\s+', '_')
-    $safe = $safe -replace '[\\/:*?"<>|]', ''
-    $safe = $safe.Trim('_', '.', ' ')
-
-    if ([string]::IsNullOrWhiteSpace($safe)) {
-        throw 'Cannot build a safe file name from an empty character name.'
-    }
-
-    return $safe
-}
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
-$fileName = Convert-ToProjectFileName -Value $Name
+$fileName = Convert-WmmaFileName -Value $Name
 $relativePath = "03_Персонажи/$fileName.md"
 $targetPath = Join-Path $root ($relativePath -replace '/', '\')
 
@@ -104,10 +90,8 @@ Set-Content -LiteralPath $targetPath -Encoding UTF8 -Value $content
 & (Join-Path $root 'tools\Собрать_индекс_персонажей.ps1') -SkipCheck
 
 if (-not $SkipCheck) {
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Created character: $relativePath"

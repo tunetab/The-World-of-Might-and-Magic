@@ -1,0 +1,17 @@
+{
+  "entity_ids": 750,
+  "relationships": 4345,
+  "preserved_histories": 38,
+  "protected_closed_documents": 6,
+  "old_startup_words": 25504,
+  "new_startup_words_excluding_agents": 1039,
+  "agents_words": 346,
+  "branch_packets": {
+    "Александрос": 1663,
+    "Михаэль": 1664,
+    "Никитосиос": 1660,
+    "Харрингтон": 1662
+  },
+  "facts": 17,
+  "unknown_source_links": 407
+}

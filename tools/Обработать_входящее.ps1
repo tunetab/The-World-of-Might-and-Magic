@@ -1,5 +1,7 @@
-﻿param(
+param(
     [string]$Title = '',
+
+    [string]$RequestId = '',
 
     [string]$Summary = 'Обработано и перенесено в профильные файлы.',
 
@@ -65,7 +67,7 @@ function Convert-ToBulletText {
 function Get-InboxEntries {
     param([string]$NewBody)
 
-    return @([regex]::Matches($NewBody, '(?ms)^###\s+(.+?)\s*\r?\n(.*?)(?=^###\s+|\z)'))
+    return @(Get-WmmaInboxEntries $NewBody)
 }
 
 function Select-InboxEntry {
@@ -185,12 +187,7 @@ function Set-SourceLifecycleStatus {
         return
     }
 
-    $updatedSourceText = [regex]::Replace(
-        $sourceText,
-        '(?m)^status:\s*\S+\s*$',
-        "status: $LifecycleStatus",
-        1
-    )
+    $updatedSourceText = Set-WmmaMeta $sourceText 'status' $LifecycleStatus
 
     if ($updatedSourceText -ne $sourceText) {
         $encoding = [System.Text.UTF8Encoding]::new($false)
@@ -204,29 +201,55 @@ $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие
 $inbox = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxPath
 $codeFence = '```'
 
-$section = [regex]::Match(
-    $inbox,
-    '(?ms)\A(.*?^## Новые сообщения\s*\r?\n)(.*?)(\r?\n## Обработанные входящие\s*\r?\n)(.*)\z'
-)
-
-if (-not $section.Success) {
+$sections=@(Get-WmmaMarkdownSections $inbox 2)
+$newSection=@($sections|Where-Object heading -eq 'Новые сообщения')|Select-Object -First 1
+$processedSection=@($sections|Where-Object heading -eq 'Обработанные входящие')|Select-Object -First 1
+if (-not $newSection -or -not $processedSection -or $newSection.index -ge $processedSection.index) {
     throw 'Inbox structure is broken: expected "## Новые сообщения" and "## Обработанные входящие".'
 }
 
-$newHeader = $section.Groups[1].Value.TrimEnd()
-$newBody = $section.Groups[2].Value
-$processedHeader = $section.Groups[3].Value.TrimEnd()
-$processedRest = $section.Groups[4].Value.TrimStart()
+$newHeader = $inbox.Substring(0,$newSection.body_start).TrimEnd()
+$newBody = $newSection.text
+$processedHeader = "`r`n`r`n## Обработанные входящие"
+$processedRest = $inbox.Substring($processedSection.body_start).TrimStart()
 
 $entries = Get-InboxEntries -NewBody $newBody
-$selected = Select-InboxEntry -Entries $entries -Needle $Title -UseFirst:$First
+if($RequestId){
+    $receipt=Get-WmmaReceipt $root $RequestId
+    if($receipt){
+        Assert-WmmaReceiptPayload $root $receipt
+        $targetState=if($Status -eq 'обработано'){'processed'}elseif($Status -eq 'отклонено'){'archived'}else{'deferred'}
+        if($receipt.state -in @('processed','archived')){
+            if($receipt.state -cne $targetState -or ($ScenePath -and $receipt.scene_path -cne $ScenePath)){throw 'Request already completed with another result.'}
+            "Processed inbox message: $RequestId (already completed)";return
+        }
+    }
+    $matching=@($entries|Where-Object {(Get-WmmaEntryField $_.Value 'Request-ID') -ceq $RequestId})
+    if($matching.Count -ne 1){throw 'Request ID must select exactly one new message.'}
+    $selected=$matching[0]
+}else{$selected = Select-InboxEntry -Entries $entries -Needle $Title -UseFirst:$First}
 $selectedHeading = $selected.Groups[1].Value.Trim()
 $selectedBody = $selected.Groups[2].Value.Trim()
+$requestId=Get-WmmaEntryField $selectedBody 'Request-ID'
+if($requestId){$receipt=Get-WmmaReceipt $root $requestId;if($receipt){Assert-WmmaReceiptPayload $root $receipt}}
+foreach($reference in @($ScenePath)+@($SourcePath)+@($Links)|Where-Object {$_}){
+    $reference=$reference.Trim([char]96)
+    if($reference -match '^[a-z]+://'){continue}
+    if(-not (Test-Path -LiteralPath (Resolve-WmmaPath $root $reference))){throw "Related file is missing: $reference"}
+}
+if($Status -eq 'отложено'){
+    $replacement=[regex]::new('(?m)^Статус:[^\r\n]*').Replace($selected.Value,'Статус: отложено.',1)
+    $start=$newSection.body_start+$selected.Index
+    Write-WmmaText $inboxPath ($inbox.Substring(0,$start)+$replacement+$inbox.Substring($start+$selected.Length))
+    if($requestId){$receipt=Get-WmmaReceipt $root $requestId;if($receipt){$receipt.state='deferred';Save-WmmaReceipt $root $receipt}}
+    if(-not $SkipCheck){& (Join-Path $root 'tools/Завершить_ход.ps1')}
+    "Deferred inbox message: $selectedHeading";return
+}
 
 if (-not [string]::IsNullOrWhiteSpace($SourcePath)) {
     $sourceLine = Format-ProjectReference -Value $SourcePath
-} elseif ($selectedBody -match '(?m)^Источник:\s*(.+?)\s*$') {
-    $sourceLine = $Matches[1].Trim()
+} elseif (Get-WmmaEntryField $selectedBody 'Источник') {
+    $sourceLine = Get-WmmaEntryField $selectedBody 'Источник'
 } else {
     $sourceLine = 'не указан'
 }
@@ -255,6 +278,7 @@ $processedLines.Add("### $selectedHeading") | Out-Null
 $processedLines.Add('') | Out-Null
 $processedLines.Add("Статус: $Status.") | Out-Null
 $processedLines.Add("Источник: $sourceLine") | Out-Null
+if($requestId){$processedLines.Add("Request-ID: $requestId")|Out-Null}
 
 if ($relatedLinks.Count -gt 0) {
     $processedLines.Add("Связано: $($relatedLinks -join ', ')") | Out-Null
@@ -266,13 +290,14 @@ $processedLines.Add('') | Out-Null
 $processedLines.Add((Convert-ToBulletText -Value $Summary)) | Out-Null
 
 $hasSourceFile = $sourceLine -match '`[^`]+\.md`'
-$rawPattern = "(?ms)$([regex]::Escape($codeFence))text\s*\r?\n(.+?)\r?\n$([regex]::Escape($codeFence))"
-if (-not $hasSourceFile -and $selectedBody -match $rawPattern) {
+$rawMessage=Get-WmmaRawMessage $selectedBody
+if (-not $hasSourceFile -and $null -ne $rawMessage) {
+    $codeFence=Get-WmmaTextFence $rawMessage
     $processedLines.Add('') | Out-Null
     $processedLines.Add('Исходное входящее:') | Out-Null
     $processedLines.Add('') | Out-Null
     $processedLines.Add("${codeFence}text") | Out-Null
-    $processedLines.Add($Matches[1].Trim()) | Out-Null
+    $processedLines.Add($rawMessage) | Out-Null
     $processedLines.Add($codeFence) | Out-Null
 }
 
@@ -291,15 +316,16 @@ if (-not [string]::IsNullOrWhiteSpace($processedRest)) {
 
 $updatedInbox += "`r`n"
 
-Set-Content -LiteralPath $inboxPath -Encoding UTF8 -Value $updatedInbox
+Write-WmmaText $inboxPath $updatedInbox
 Set-SourceLifecycleStatus -Root $root -SourceLine $sourceLine -LifecycleStatus $sourceLifecycleStatus
+if($requestId){
+    $receipt=Get-WmmaReceipt $root $requestId
+    if($receipt){$receipt.state=if($Status -eq 'обработано'){'processed'}else{'archived'};if($ScenePath){$receipt.scene_path=$ScenePath};Save-WmmaReceipt $root $receipt}
+}
 
 if (-not $SkipCheck) {
-    $global:LASTEXITCODE = 0
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if (-not $? -or $LASTEXITCODE -ne 0) {
-        exit 1
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Processed inbox message: $selectedHeading"

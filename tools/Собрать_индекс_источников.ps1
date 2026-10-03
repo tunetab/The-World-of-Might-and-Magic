@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipCheck
 )
 
@@ -7,7 +7,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 Invoke-WmmaToolMain -Root $root -Name $MyInvocation.MyCommand.Name -ScriptBlock {
@@ -15,35 +14,6 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 $sourceRoot = Join-Path $root '08_Источники'
 $inboxPath = Join-Path $root '07_Черновики_и_идеи\Входящие_сообщения.md'
 $targetPath = Join-Path $sourceRoot '00_Индекс_источников.md'
-
-function Get-RelativeProjectPath {
-    param([string]$Path)
-
-    return (($Path.Substring($root.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
-
-function Get-Meta {
-    param(
-        [string]$Text,
-        [string]$Field
-    )
-
-    if ($Text -match "(?m)^$([regex]::Escape($Field)):\s*(.*?)\s*$") {
-        return $Matches[1].Trim()
-    }
-
-    return '-'
-}
-
-function Get-Title {
-    param([string]$Text)
-
-    if ($Text -match '(?m)^#\s+(.+?)\s*$') {
-        return $Matches[1].Trim()
-    }
-
-    return 'Без названия'
-}
 
 function Get-DateFromFileName {
     param([string]$FileName)
@@ -100,11 +70,11 @@ $rows = @(
         Where-Object { $_.Name -ne '00_Индекс_источников.md' } |
         ForEach-Object {
             $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName
-            $relativePath = Get-RelativeProjectPath $_.FullName
-            $date = Get-Meta -Text $text -Field 'date'
+            $relativePath = Get-WmmaRelativePath -Root $root $_.FullName
+            $date = Get-WmmaMeta -Default '-' -Text $text -Field 'date'
 
             if ($date -eq '-') {
-                $date = Get-Meta -Text $text -Field 'received_real_date'
+                $date = Get-WmmaMeta -Default '-' -Text $text -Field 'received_real_date'
             }
 
             if ($date -eq '-') {
@@ -113,10 +83,10 @@ $rows = @(
 
             [pscustomobject]@{
                 Date = $date
-                Status = Get-Meta -Text $text -Field 'status'
-                Type = Get-Meta -Text $text -Field 'type'
+                Status = Get-WmmaMeta -Default '-' -Text $text -Field 'status'
+                Type = Get-WmmaMeta -Default '-' -Text $text -Field 'type'
                 Inbox = Get-InboxState -InboxText $inboxText -Reference $relativePath
-                Title = Get-Title -Text $text
+                Title = Get-WmmaTitle -Text $text
                 File = $relativePath
             }
         } |
@@ -143,7 +113,7 @@ foreach ($row in $rows) {
     $lines.Add("| $($row.Date) | $($row.Status) | $($row.Type) | $($row.Inbox) | $($row.Title) | ``$($row.File)`` |") | Out-Null
 }
 
-Set-Content -LiteralPath $targetPath -Encoding UTF8 -Value $lines
+Write-WmmaGeneratedText -Path $targetPath -Text (($lines -join "`n")+"`n")
 
 if (-not $SkipCheck) {
     $global:LASTEXITCODE = 0
@@ -153,5 +123,5 @@ if (-not $SkipCheck) {
     }
 }
 
-"Built source index: $(Get-RelativeProjectPath $targetPath)"
+"Built source index: $(Get-WmmaRelativePath -Root $root $targetPath)"
 }

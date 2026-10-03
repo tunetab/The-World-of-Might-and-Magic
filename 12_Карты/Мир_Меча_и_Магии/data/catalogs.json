@@ -1,0 +1,137 @@
+{
+  "cultures": [],
+  "governments": [
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv1",
+      "name": "Монархия"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv2",
+      "name": "Империя"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv3",
+      "name": "Республика"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv4",
+      "name": "Теократия"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv5",
+      "name": "Олигархия"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "gv6",
+      "name": "Племенной союз"
+    }
+  ],
+  "positions": [
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po1",
+      "name": "Канцлер"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po2",
+      "name": "Казначей"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po3",
+      "name": "Маршал"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po4",
+      "name": "Адмирал"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po5",
+      "name": "Тайный советник"
+    },
+    {
+      "builtin": false,
+      "color": "#888888",
+      "icon": "",
+      "id": "po6",
+      "name": "Придворный маг"
+    }
+  ],
+  "races": [],
+  "religions": [],
+  "resources": [
+    {
+      "builtin": true,
+      "color": "#e2b33c",
+      "icon": "coins",
+      "id": "rs1",
+      "name": "Золото"
+    },
+    {
+      "builtin": false,
+      "color": "#d9c36b",
+      "icon": "grain",
+      "id": "rs2",
+      "name": "Зерно"
+    },
+    {
+      "builtin": false,
+      "color": "#8a6a43",
+      "icon": "wood",
+      "id": "rs3",
+      "name": "Древесина"
+    },
+    {
+      "builtin": false,
+      "color": "#9aa0a8",
+      "icon": "stone",
+      "id": "rs4",
+      "name": "Камень"
+    },
+    {
+      "builtin": false,
+      "color": "#6d7c8f",
+      "icon": "iron",
+      "id": "rs5",
+      "name": "Железо"
+    },
+    {
+      "builtin": false,
+      "color": "#a0714f",
+      "icon": "horse",
+      "id": "rs6",
+      "name": "Лошади"
+    }
+  ]
+}

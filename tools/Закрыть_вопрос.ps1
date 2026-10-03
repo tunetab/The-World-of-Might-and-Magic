@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^Q-(?:C\d+|WORLD)-\d{3}$')]
     [string]$QuestionId,
@@ -13,7 +13,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-
 . (Join-Path $PSScriptRoot '_lib.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
@@ -22,7 +21,7 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 $registryPath = Join-Path $root '09_Реестры\Вопросы.json'
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
-    throw "Question registry is missing: 09_Реестры/Вопросы.json. Run .\tools\Собрать_вопросы.ps1 -ImportFromMarkdown once."
+    throw "Question registry is missing: 09_Реестры/Вопросы.json. Restore the authoritative JSON registry from a verified backup."
 }
 
 $registryText = Get-Content -Raw -Encoding UTF8 -LiteralPath $registryPath
@@ -64,15 +63,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (-not $SkipCheck) {
-    & (Join-Path $root 'tools\Собрать_панель_хода.ps1') -SkipCheck
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-
-    & (Join-Path $root 'tools\Проверить_проект.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    & (Join-Path $root 'tools/Завершить_ход.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Final turn validation failed.'}
 }
 
 "Closed question: $QuestionId"

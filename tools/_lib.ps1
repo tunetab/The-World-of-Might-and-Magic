@@ -1,4 +1,11 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib/Core.ps1')
+. (Join-Path $PSScriptRoot 'lib/Graph.ps1')
+. (Join-Path $PSScriptRoot 'lib/ReadModel.ps1')
+. (Join-Path $PSScriptRoot 'lib/Context.ps1')
+. (Join-Path $PSScriptRoot 'lib/Connections.ps1')
+. (Join-Path $PSScriptRoot 'lib/Transactions.ps1')
 
 function Get-WmmaToolLockPath {
     param(

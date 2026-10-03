@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "type": "event_relations",
+  "relations": [
+    {
+      "from": "SCENE-0062",
+      "to": "SCENE-0118",
+      "relation": "after",
+      "evidence_ids": [
+        "SRC-0233"
+      ],
+      "precision": "relative"
+    },
+    {
+      "from": "SCENE-0063",
+      "to": "SCENE-0062",
+      "relation": "after",
+      "evidence_ids": [
+        "SRC-0242"
+      ],
+      "precision": "relative"
+    },
+    {
+      "from": "SCENE-0107",
+      "to": "SCENE-0062",
+      "relation": "overlaps",
+      "evidence_ids": [
+        "SRC-0232"
+      ],
+      "precision": "relative"
+    }
+  ]
+}
